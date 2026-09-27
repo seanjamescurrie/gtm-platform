@@ -1,0 +1,19 @@
+{
+  "name": "@gtm/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@gtm/config": "workspace:*",
+    "fastify": "5.12.5"
+  },
+  "devDependencies": {
+    "vitest": "5.0.2"
+  }
+}
