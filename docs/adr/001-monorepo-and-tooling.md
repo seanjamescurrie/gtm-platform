@@ -76,6 +76,22 @@ dashboard) sharing config, DB access and API clients.
 - Trade-off: it can't give packages different environments. Switch to Vitest `projects` when the
   React dashboard (week 10) needs jsdom.
 
+### Local infrastructure (#2)
+
+- **Valkey 8.1 instead of Redis**, under the service name `redis`. Valkey is the Linux Foundation
+  fork of Redis 7.2, with the same protocol, supported by BullMQ, and offered by ElastiCache as its
+  cheaper engine. Running it locally gives dev/prod parity for weeks 11–12. App code and env vars
+  stay `REDIS_*`. Trade-off: PLAN.md says "Redis"; `redis:7.4-alpine` would be a drop-in if needed.
+- **`maxmemory-policy noeviction` + AOF persistence.** BullMQ stores jobs as keys, and eviction
+  would silently drop them. Trade-off: a full Redis fails writes loudly instead.
+- **pgvector enabled by the Drizzle migration (#4), not a Docker init script.** RDS never runs
+  init scripts, so the migration must do it anyway; doing it once keeps local and AWS identical.
+- **Temporal CLI dev server** (`temporalio/temporal`, SQLite, UI built in) instead of `auto-setup`
+  plus its own DB and a UI container. Temporal Cloud replaces it in production. The image runs as
+  a non-root user, so its volume mounts over `/home/temporal` to inherit that ownership.
+- Ports bind to `127.0.0.1` (dev credentials never reachable from the network); health checks
+  plus `docker compose up -d --wait` so nothing starts before its dependencies are ready.
+
 ## Still to decide / write up in #6
 
 - Drizzle vs Prisma/Kysely (#4)
