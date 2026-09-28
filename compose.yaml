@@ -4,6 +4,7 @@
 
 services:
   postgres:
+    # Keep in sync with the postgres service image in .github/workflows/ci.yml.
     image: pgvector/pgvector:0.8.6-pg16
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-gtm}
