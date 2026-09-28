@@ -39,6 +39,33 @@ dashboard) sharing config, DB access and API clients.
 - pnpm blocks dependency install scripts by default. Allowlist them one by one in `allowBuilds`
   (currently only `esbuild`, which tsx needs).
 
+### Shared config at the repo root (#3)
+- `tsconfig.base.json`, `eslint.config.js`, `.prettierrc.json` and `vitest.config.ts` live at the
+  root, not in `@gtm/*-config` packages. One repo with nothing published, so a config package would
+  add a layer without buying anything.
+- Trade-off: splitting repos later would mean extracting these into packages.
+
+### ESLint: flat config, typescript-eslint `recommendedTypeChecked`
+- Type-aware rules catch async bugs that matter in queue/worker code: `no-floating-promises` and
+  `no-misused-promises`. The second flagged a real bug on day one: async `shutdown` passed to
+  `process.once`, where a rejected `app.close()` would have been an unhandled rejection.
+- The CLAUDE.md rule "no `any` without a comment" is enforced: `no-explicit-any: error` plus
+  `eslint-comments/require-description`, so a disable needs `-- reason`. Unused disables are errors.
+- Not `strictTypeChecked` yet: too noisy while learning. Revisit later.
+- Trade-off: type-aware linting runs the TS compiler, so it's slower than syntax-only linting.
+
+### Prettier runs separately from ESLint
+- `eslint-config-prettier` (loaded last) turns off ESLint's style rules; no `eslint-plugin-prettier`.
+  Lint output is about bugs, formatting is fast, and each tool has one job.
+- Trade-off: two commands (`lint`, `format:check`) instead of one.
+
+### Vitest over Jest, one root config
+- Vitest runs ESM + TypeScript natively with no transform setup; Jest's ESM support still needs
+  extra config. The API is Jest-compatible, so the knowledge carries over.
+- One root `vitest.config.ts` with an explicit `include` gives one run and one report; `LOG_LEVEL=silent`
+  keeps Fastify logs out of test output.
+- Trade-off: it can't give packages different environments. Switch to Vitest `projects` when the
+  React dashboard (week 10) needs jsdom.
+
 ## Still to decide / write up in #6
 - Drizzle vs Prisma/Kysely (#4)
-- Vitest vs Jest; ESLint flat config + Prettier (#3)
