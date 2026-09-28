@@ -5,11 +5,17 @@ const app = buildServer();
 
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
   app.log.info({ signal }, 'shutting down');
-  await app.close();
-  process.exit(0);
+  try {
+    await app.close();
+    process.exit(0);
+  } catch (err) {
+    app.log.error({ err }, 'error during shutdown');
+    process.exit(1);
+  }
 }
-process.once('SIGINT', shutdown);
-process.once('SIGTERM', shutdown);
+// Signal handlers ignore returned promises, so shutdown handles its own errors and we mark it `void`.
+process.once('SIGINT', (signal) => void shutdown(signal));
+process.once('SIGTERM', (signal) => void shutdown(signal));
 
 try {
   await app.listen({ port: getApiPort(), host: '0.0.0.0' });
