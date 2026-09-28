@@ -92,6 +92,33 @@ dashboard) sharing config, DB access and API clients.
 - Ports bind to `127.0.0.1` (dev credentials never reachable from the network); health checks
   plus `docker compose up -d --wait` so nothing starts before its dependencies are ready.
 
+### Database access: Drizzle + node-postgres (#4)
+
+- **Drizzle over Prisma or Kysely.** The schema is TypeScript and generates reviewable SQL
+  migrations. Queries read like SQL, so what runs is obvious. It has no separate engine binary or
+  codegen step (unlike Prisma), and still has a schema/migration story (unlike Kysely, a query
+  builder only). Trade-off: a smaller ecosystem than Prisma, and pre-1.0 (pinned to 0.45; 1.0 is
+  still RC).
+- **`pg` (node-postgres) with a `Pool`**: the most widely used driver, and what RDS examples
+  assume. The pool needs an `'error'` handler, or an idle client dropping its connection crashes
+  the process. Trade-off: postgres.js is faster with a nicer API, which doesn't matter at our scale.
+- **Committed migrations (`drizzle-kit generate` + `migrate`), never `push`.** Reviewed SQL, and
+  the same files run on RDS. Migrations are **append-only once merged**: the migrator applies any
+  journal entry newer than the last one applied, so regenerating a migration makes existing
+  databases re-run it. Learned this the hard way during #4. Generated files are in
+  `.prettierignore`, so formatting never rewrites them.
+- **`companies` schema:** a surrogate `uuid` PK plus a unique `company_number` (text: `NI`/`SC`
+  prefixes and leading zeros) as the upsert key. `status`/`company_type` are text, validated by zod
+  at the boundary, not Postgres enums, because Companies House can add values and an enum would
+  fail inserts mid-ingest. `sic_codes text[]` with a GIN index for overlap filters. Dates use
+  `mode: 'string'` to avoid JS `Date` timezone shifts.
+- **Integration tests use a separate `*_test` database** created by Vitest global setup, with a
+  guard that refuses any other database name, because the tests truncate tables. They run via
+  `pnpm test:int`, so `pnpm test` needs no Docker.
+- **Env:** `getDatabaseUrl()` is the first zod-validated env value, and its errors never echo the
+  URL (it contains the password). Scripts load `.env` with Node's `--env-file-if-exists`, so no
+  dotenv dependency.
+
 ## Still to decide / write up in #6
 
-- Drizzle vs Prisma/Kysely (#4)
+- Nothing outstanding for week 1; finalise status, context and consequences.
