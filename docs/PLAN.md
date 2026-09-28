@@ -65,35 +65,35 @@ runs that need durable state, retries across crashes, and a human approval step.
 
 ## Stack
 
-| Layer | Choice | Why |
-| --- | --- | --- |
-| Language | TypeScript; one small Python service later (scoring or embeddings) | Owner's strongest stack, plus one cross-language boundary |
-| API | Node 22 + Fastify | Fast, typed, simple plugin model |
-| Job queue | BullMQ on Redis | Retries, delays, rate limits built in |
-| Durable execution | Temporal (TS SDK) | Most-cited in enterprise job specs; Inngest is the lighter fallback |
-| LLM | Claude API via the TS SDK; LangChain in one place (RAG retrieval) | Learn tool use and prompt caching at SDK level first |
-| Data | Postgres 16 + pgvector (Drizzle ORM), Redis | One database for relational and vector data |
-| CRM | HubSpot developer test account | Free, real OAuth and webhooks |
-| Email | Nylas sandbox or Gmail OAuth | Real send path without cold-emailing anyone |
-| Frontend | React + Vite | Owner's existing strength |
-| Local infra | docker-compose | Postgres, Redis, Temporal dev server in one command |
-| Deployment | AWS via CDK (TypeScript) | Most-requested cloud; infrastructure as typed code |
+| Layer             | Choice                                                             | Why                                                                 |
+| ----------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| Language          | TypeScript; one small Python service later (scoring or embeddings) | Owner's strongest stack, plus one cross-language boundary           |
+| API               | Node 22 + Fastify                                                  | Fast, typed, simple plugin model                                    |
+| Job queue         | BullMQ on Redis                                                    | Retries, delays, rate limits built in                               |
+| Durable execution | Temporal (TS SDK)                                                  | Most-cited in enterprise job specs; Inngest is the lighter fallback |
+| LLM               | Claude API via the TS SDK; LangChain in one place (RAG retrieval)  | Learn tool use and prompt caching at SDK level first                |
+| Data              | Postgres 16 + pgvector (Drizzle ORM), Redis                        | One database for relational and vector data                         |
+| CRM               | HubSpot developer test account                                     | Free, real OAuth and webhooks                                       |
+| Email             | Nylas sandbox or Gmail OAuth                                       | Real send path without cold-emailing anyone                         |
+| Frontend          | React + Vite                                                       | Owner's existing strength                                           |
+| Local infra       | docker-compose                                                     | Postgres, Redis, Temporal dev server in one command                 |
+| Deployment        | AWS via CDK (TypeScript)                                           | Most-requested cloud; infrastructure as typed code                  |
 
 ## Deployment target (weeks 11–12)
 
 Local development stays on docker-compose. The app stays cloud-agnostic: config
 comes from env vars, and app code doesn't call the AWS SDK.
 
-| Local | AWS |
-| --- | --- |
+| Local                  | AWS                              |
+| ---------------------- | -------------------------------- |
 | API and BullMQ workers | ECS on Fargate, one service each |
-| Postgres + pgvector | RDS for PostgreSQL |
-| Redis | ElastiCache |
-| Temporal dev server | Temporal Cloud |
-| `.env` | Secrets Manager |
-| pino logs | CloudWatch Logs |
-| React dashboard | S3 + CloudFront |
-| Claude API | Direct API, or Claude on Bedrock |
+| Postgres + pgvector    | RDS for PostgreSQL               |
+| Redis                  | ElastiCache                      |
+| Temporal dev server    | Temporal Cloud                   |
+| `.env`                 | Secrets Manager                  |
+| pino logs              | CloudWatch Logs                  |
+| React dashboard        | S3 + CloudFront                  |
+| Claude API             | Direct API, or Claude on Bedrock |
 
 RDS, ElastiCache and NAT gateways bill hourly. Set a billing alarm before the
 first deploy, and `cdk destroy` when not demoing.
@@ -104,11 +104,13 @@ Each phase maps to a GitHub milestone with the same name. A phase is done only
 when its **Done when** line is true.
 
 ### Week 1 — Foundations
+
 pnpm monorepo, docker-compose, shared tsconfig/ESLint/Prettier/Vitest, Drizzle
 with a `companies` table, GitHub Actions CI, ADR-001.
 **Done when:** `docker compose up` plus `pnpm dev` starts the API, and CI is green.
 
 ### Week 2 — Ingestion, queues, rate limiting
+
 Companies House client (hand-written), BullMQ ingest queue with idempotent
 upserts, Redis token-bucket rate limiter (hand-written), Redis response cache,
 queue dashboard.
@@ -116,6 +118,7 @@ queue dashboard.
 duplicate API calls.
 
 ### Weeks 3–4 — Waterfall enrichment
+
 `EnrichmentProvider` interface; providers for Companies House officers, website
 scraping (Playwright), Hunter, Apollo, and a mock; waterfall runner with
 per-field provenance; cost ledger; dead-letter queue; ADR-002.
@@ -123,6 +126,7 @@ per-field provenance; cost ledger; dead-letter queue; ADR-002.
 cached runs cost nothing.
 
 ### Weeks 5–6 — Durable research agent
+
 Temporal worker and `researchAccount` workflow (hand-written); activities to
 fetch pages, read filings, summarise and score fit; Claude tool-use loop with
 structured output (hand-written); prompt caching; approval via Temporal signal;
@@ -131,28 +135,33 @@ crash-and-resume test; ADR-003. Optional: first CDK deploy of API + RDS.
 wait for approval. This is the demo-able core.
 
 ### Week 7 — RAG personalisation
+
 Synthetic email corpus with reply outcomes (generated by Claude), embeddings in
 pgvector, drafts built from the account brief plus retrieved examples, LangChain
 for retrieval.
 **Done when:** each draft cites the brief facts and retrieved examples it used.
 
 ### Week 8 — Execution and deliverability
+
 Sandbox sending, throttling, send windows, per-mailbox caps, bounce and reply
 webhooks, README note on SPF/DKIM/DMARC.
 **Done when:** an approved draft sends, and a reply changes the prospect's status
 automatically.
 
 ### Week 9 — CRM sync
+
 HubSpot OAuth app; push companies, contacts and activity; webhooks back into
 Postgres with conflict handling. Stretch: Redpanda event stream for domain events.
 **Done when:** a change in HubSpot shows up in Postgres, and vice versa.
 
 ### Week 10 — Dashboard and observability
+
 React dashboard (prospects, workflow status, draft approval), structured logs with
 correlation IDs, LLM evals with Claude as judge.
 **Done when:** the whole flow runs from the UI.
 
 ### Weeks 11–12 — AWS deployment and packaging
+
 AWS account setup, CDK stack, Temporal Cloud, Secrets Manager, S3 + CloudFront,
 GitHub Actions deploy via OIDC, ADR-004 (AWS choices, SQS vs BullMQ), README,
 demo video, teardown, mock interview.

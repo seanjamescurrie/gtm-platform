@@ -6,14 +6,10 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@gtm/config": "workspace:*",
     "fastify": "5.12.5"
-  },
-  "devDependencies": {
-    "vitest": "5.0.2"
   }
 }
