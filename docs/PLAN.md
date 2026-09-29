@@ -53,7 +53,7 @@ employees (SIC codes 62011, 62012, 62020). The platform:
                             │
       ┌─────────────────────▼─────────────────────┐
       │ State                                     │
-      │  Postgres + pgvector   │  Redis           │
+      │  Postgres + pgvector   │  Valkey          │
       │  prospects, CRM, RAG   │  queues, cache,  │
       │                        │  rate limits     │
       └───────────────────────────────────────────┘
@@ -65,19 +65,19 @@ runs that need durable state, retries across crashes, and a human approval step.
 
 ## Stack
 
-| Layer             | Choice                                                             | Why                                                                 |
-| ----------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------- |
-| Language          | TypeScript; one small Python service later (scoring or embeddings) | Owner's strongest stack, plus one cross-language boundary           |
-| API               | Node 22 + Fastify                                                  | Fast, typed, simple plugin model                                    |
-| Job queue         | BullMQ on Redis                                                    | Retries, delays, rate limits built in                               |
-| Durable execution | Temporal (TS SDK)                                                  | Most-cited in enterprise job specs; Inngest is the lighter fallback |
-| LLM               | Claude API via the TS SDK; LangChain in one place (RAG retrieval)  | Learn tool use and prompt caching at SDK level first                |
-| Data              | Postgres 16 + pgvector (Drizzle ORM), Redis                        | One database for relational and vector data                         |
-| CRM               | HubSpot developer test account                                     | Free, real OAuth and webhooks                                       |
-| Email             | Nylas sandbox or Gmail OAuth                                       | Real send path without cold-emailing anyone                         |
-| Frontend          | React + Vite                                                       | Owner's existing strength                                           |
-| Local infra       | docker-compose                                                     | Postgres, Redis, Temporal dev server in one command                 |
-| Deployment        | AWS via CDK (TypeScript)                                           | Most-requested cloud; infrastructure as typed code                  |
+| Layer             | Choice                                                             | Why                                                                                          |
+| ----------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| Language          | TypeScript; one small Python service later (scoring or embeddings) | Owner's strongest stack, plus one cross-language boundary                                    |
+| API               | Node 22 + Fastify                                                  | Fast, typed, simple plugin model                                                             |
+| Job queue         | BullMQ on Valkey                                                   | Retries, delays, rate limits built in                                                        |
+| Durable execution | Temporal (TS SDK)                                                  | Most-cited in enterprise job specs; Inngest is the lighter fallback                          |
+| LLM               | Claude API via the TS SDK; LangChain in one place (RAG retrieval)  | Learn tool use and prompt caching at SDK level first                                         |
+| Data              | Postgres 16 + pgvector (Drizzle ORM), Valkey (Redis-compatible)    | One database for relational and vector data; Valkey is the engine ElastiCache runs (ADR-001) |
+| CRM               | HubSpot developer test account                                     | Free, real OAuth and webhooks                                                                |
+| Email             | Nylas sandbox or Gmail OAuth                                       | Real send path without cold-emailing anyone                                                  |
+| Frontend          | React + Vite                                                       | Owner's existing strength                                                                    |
+| Local infra       | docker-compose                                                     | Postgres, Valkey, Temporal dev server in one command                                         |
+| Deployment        | AWS via CDK (TypeScript)                                           | Most-requested cloud; infrastructure as typed code                                           |
 
 ## Deployment target (weeks 11–12)
 
@@ -88,7 +88,7 @@ comes from env vars, and app code doesn't call the AWS SDK.
 | ---------------------- | -------------------------------- |
 | API and BullMQ workers | ECS on Fargate, one service each |
 | Postgres + pgvector    | RDS for PostgreSQL               |
-| Redis                  | ElastiCache                      |
+| Valkey                 | ElastiCache for Valkey           |
 | Temporal dev server    | Temporal Cloud                   |
 | `.env`                 | Secrets Manager                  |
 | pino logs              | CloudWatch Logs                  |
@@ -112,7 +112,7 @@ with a `companies` table, GitHub Actions CI, ADR-001.
 ### Week 2 — Ingestion, queues, rate limiting
 
 Companies House client (hand-written), BullMQ ingest queue with idempotent
-upserts, Redis token-bucket rate limiter (hand-written), Redis response cache,
+upserts, token-bucket rate limiter on Valkey (hand-written), Valkey response cache,
 queue dashboard.
 **Done when:** 500+ companies ingested without a 429, and a re-run makes zero
 duplicate API calls.
