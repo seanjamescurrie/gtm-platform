@@ -115,7 +115,8 @@
 - **Migrations are append-only once merged.** The migrator applies any journal entry newer than
   the last one applied, so regenerating a merged migration makes existing databases re-run it.
   Generated migration files are excluded from Prettier for the same reason.
-- Valkey differs from the "Redis" named in PLAN.md. App code and env vars keep the `REDIS_*` names.
+- The engine is Valkey, but env vars and code keep `REDIS_*` names (the protocol and client
+  libraries are Redis ones), so the naming doesn't match the engine.
 - The Postgres image tag lives in two files (`compose.yaml` and `ci.yml`), cross-referenced by
   comments.
 
