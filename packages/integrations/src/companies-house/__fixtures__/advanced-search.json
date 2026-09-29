@@ -1,0 +1,78 @@
+{
+  "etag": "69267e76896ea63295b6dca792d8adf3a39d9fb9",
+  "top_hit": {
+    "company_name": "CROWN OVERSEAS SERVICES LIMITED",
+    "company_number": "NI019095",
+    "company_status": "active",
+    "company_type": "ltd",
+    "kind": "search-results#company",
+    "links": {
+      "company_profile": "/company/NI019095"
+    },
+    "date_of_creation": "1986-01-16",
+    "registered_office_address": {
+      "address_line_1": "Unit 12",
+      "address_line_2": "Graham Industrial Park",
+      "locality": "Dargan Crescent",
+      "postal_code": "BT3 9JP",
+      "region": "Belfast"
+    },
+    "sic_codes": ["27900"]
+  },
+  "items": [
+    {
+      "company_name": "CROWN OVERSEAS SERVICES LIMITED",
+      "company_number": "NI019095",
+      "company_status": "active",
+      "company_type": "ltd",
+      "kind": "search-results#company",
+      "links": {
+        "company_profile": "/company/NI019095"
+      },
+      "date_of_creation": "1986-01-16",
+      "registered_office_address": {
+        "address_line_1": "Unit 12",
+        "address_line_2": "Graham Industrial Park",
+        "locality": "Dargan Crescent",
+        "postal_code": "BT3 9JP",
+        "region": "Belfast"
+      },
+      "sic_codes": ["27900"]
+    },
+    {
+      "company_name": "MORGAN & STEWART (LIFE & PENSIONS) LIMITED",
+      "company_number": "NI020744",
+      "company_status": "active",
+      "company_type": "ltd",
+      "kind": "search-results#company",
+      "links": {
+        "company_profile": "/company/NI020744"
+      },
+      "date_of_creation": "1987-07-24",
+      "registered_office_address": {
+        "address_line_1": "13 Castle Street",
+        "address_line_2": "Lisburn",
+        "locality": "Co Antrim",
+        "postal_code": "BT27 4SP"
+      }
+    },
+    {
+      "company_name": "B.M. & J.R. CRANFIELD LIMITED",
+      "company_number": "NI025749",
+      "company_status": "active",
+      "company_type": "ltd",
+      "kind": "search-results#company",
+      "links": {
+        "company_profile": "/company/NI025749"
+      },
+      "date_of_creation": "1991-07-09",
+      "registered_office_address": {
+        "address_line_1": "40 University Street",
+        "address_line_2": "Belfast",
+        "postal_code": "BT7 1FZ"
+      }
+    }
+  ],
+  "kind": "search#advanced-search",
+  "hits": 5513772
+}
