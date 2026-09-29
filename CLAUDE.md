@@ -13,25 +13,25 @@ Full plan, architecture and weekly goals: @docs/PLAN.md Tasks: GitHub issues, on
 
 ## Current phase
 
-Phase 1 (week 1–2): foundations, Companies House ingestion, BullMQ, Redis cache and rate limiting.
+Phase 1 (week 1–2): foundations, Companies House ingestion, BullMQ, Valkey cache and rate limiting.
 Do not build features from later phases unless asked.
 
 ## Stack
 
 - TypeScript everywhere, Node 22, pnpm workspaces
 - API: Fastify (`apps/api`)
-- Jobs: BullMQ on Redis (`apps/worker`)
+- Jobs: BullMQ on Valkey (`apps/worker`). Valkey is Redis-compatible: clients and env vars use `REDIS_*` names
 - DB: Postgres 16 + pgvector, Drizzle ORM (`packages/db`)
 - External clients: `packages/integrations`
 - Cache and rate limiter: `packages/infra`
 - Config: zod-validated env (`packages/config`)
 - Tests: Vitest
 - Later: Temporal (TS SDK), Claude API, React + Vite, HubSpot, Nylas
-- Deployment (weeks 11–12): AWS via CDK in TypeScript — ECS Fargate, RDS Postgres, ElastiCache, Temporal Cloud, S3 + CloudFront. Local dev stays on docker-compose; keep the app cloud-agnostic (config via env, no AWS SDK calls in app code unless asked)
+- Deployment (weeks 11–12): AWS via CDK in TypeScript — ECS Fargate, RDS Postgres, ElastiCache for Valkey, Temporal Cloud, S3 + CloudFront. Local dev stays on docker-compose; keep the app cloud-agnostic (config via env, no AWS SDK calls in app code unless asked)
 
 ## Commands
 
-- `docker compose up -d` — Postgres, Redis, Temporal dev server
+- `docker compose up -d` — Postgres, Valkey, Temporal dev server
 - `pnpm dev` — run api and worker in watch mode
 - `pnpm test` / `pnpm lint` / `pnpm typecheck`
 - `pnpm --filter @gtm/db migrate` — run migrations
@@ -63,6 +63,6 @@ Do not build features from later phases unless asked.
 
 ## Decisions so far
 
-- ADR-001: pnpm monorepo, Drizzle, Vitest
+- ADR-001: pnpm monorepo, Drizzle, Vitest, Valkey instead of Redis (matches ElastiCache)
 - BullMQ for job-shaped work; Temporal reserved for long-running agent workflows
 - Kafka deferred; optional event stream in week 9 at most
