@@ -31,3 +31,16 @@ export function getDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   }
   return result.data;
 }
+
+const companiesHouseKey = z.uuid({ version: 'v4', error: 'must be a valid UUID v4' });
+
+export function getCompaniesHouseApiKey(env: NodeJS.ProcessEnv = process.env): string {
+  const key = companiesHouseKey.safeParse(env.COMPANIES_HOUSE_API_KEY);
+  if (!key.success) {
+    const reason = env.COMPANIES_HOUSE_API_KEY
+      ? (key.error.issues[0]?.message ?? 'invalid')
+      : 'is not set';
+    throw new Error(`COMPANIES_HOUSE_API_KEY ${reason}`);
+  }
+  return key.data;
+}

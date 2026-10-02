@@ -1,0 +1,58 @@
+{
+  "accounts": {
+    "accounting_reference_date": { "day": "30", "month": "09" },
+    "last_accounts": {
+      "made_up_to": "1989-09-30",
+      "period_end_on": "1989-09-30",
+      "period_start_on": "1988-10-01",
+      "type": "full"
+    },
+    "next_accounts": {
+      "due_on": "1991-07-30",
+      "overdue": true,
+      "period_end_on": "1990-09-30",
+      "period_start_on": "1989-10-01"
+    },
+    "next_due": "1991-07-30",
+    "next_made_up_to": "1990-09-30",
+    "overdue": true
+  },
+  "annual_return": { "last_made_up_to": "1989-12-29", "overdue": true },
+  "can_file": true,
+  "company_name": "PLANNED MEDIA COMMUNICATIONS LIMITED",
+  "company_number": "NI017846",
+  "company_status": "liquidation",
+  "status": "liquidation",
+  "confirmation_statement": {
+    "next_due": "2017-01-12",
+    "next_made_up_to": "2016-12-29",
+    "overdue": true
+  },
+  "date_of_creation": "1984-10-03",
+  "etag": "aeb3dbc766f703dc964d32a74034af1b38ab1421",
+  "has_been_liquidated": false,
+  "has_charges": true,
+  "has_insolvency_history": false,
+  "jurisdiction": "northern-ireland",
+  "links": {
+    "self": "/company/NI017846",
+    "charges": "/company/NI017846/charges",
+    "filing_history": "/company/NI017846/filing-history",
+    "officers": "/company/NI017846/officers"
+  },
+  "previous_company_names": [
+    {
+      "ceased_on": "1988-11-21",
+      "effective_from": "1984-10-03",
+      "name": "MOYNE SHELF COMPANY (NO.6) LIMITED"
+    }
+  ],
+  "registered_office_address": {
+    "address_line_1": "1 Columba Terrace",
+    "address_line_2": "Londonderry",
+    "locality": "Co Londonderry",
+    "postal_code": "BT47 1JT"
+  },
+  "type": "ltd",
+  "undeliverable_registered_office_address": false
+}
