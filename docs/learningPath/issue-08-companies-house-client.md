@@ -1,8 +1,8 @@
 # Learning path: #8 Companies House client
 
-Companion to issue #8 (hand-written). Part 1 records what the schema and error work taught,
-with names you can search. Part 2 is the plan for `client.ts`. Reference:
-[errors and retries worked example](errors-and-retries-worked-example.md).
+Companion to issue #8 (hand-written). Part 1 records what each piece of the work taught, with
+names you can search. Part 2 describes the client as built. Part 3 is what to revise, with
+exercises. Reference: [errors and retries worked example](errors-and-retries-worked-example.md).
 
 **Goal:** explain every decision in `packages/integrations/src/companies-house/` in 30 seconds:
 what it does, why, and what it costs.
@@ -12,11 +12,12 @@ what it does, why, and what it costs.
 - [x] Checkpoint 1: `getCompaniesHouseApiKey` in `@gtm/config`
 - [x] Checkpoint 2: response schemas and real fixtures
 - [x] `errors.ts`: error kinds, retry table, status mapping
-- [ ] Checkpoint 3: `client.ts`, the HTTP core
-- [ ] Checkpoint 4: `advancedSearch` and `getCompanyProfile`, logging, exports
-- [ ] PR review, and failure modes checked against tests
+- [x] Checkpoint 3: `client.ts`, the HTTP core
+- [x] Checkpoint 4: `advancedSearch` and `getCompanyProfile`, logging, exports
+- [x] Smoke test against the live API (2026-10-02): real search, real profile, real 404, key never logged
+- [ ] PR merged, and Part 3 revised
 
-## Part 1: lessons so far
+## Part 1: lessons
 
 ### Schemas (checkpoint 2)
 
@@ -47,10 +48,34 @@ what it does, why, and what it costs.
 | Keep the clock as a parameter at one edge; helpers shouldn't default to `new Date()`                         | Functional core, imperative shell; clock injection | Exact-time tests for 429s                                     |
 | Copying an example is fine; **justify every line for your own case** or delete it                            | —                                                  | The weather API's `retry-after` survived two reviews          |
 
+### Client (checkpoints 3–4)
+
+| Lesson                                                                                                     | Name to search                           | Where it bit us                                                                       |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------- |
+| An injected dependency only helps if the code **uses** it                                                  | Dependency injection                     | Calling global `fetch` instead of `this.fetch`: the tests hit the real internet       |
+| `+` binds tighter than `??`, so `a ?? b + c` means `a ?? (b + c)`                                          | Operator precedence                      | Every request went to the bare domain; use `new URL(path, base)` instead              |
+| `x ?? undefined` does nothing; the default goes on the right of `??`                                       | Nullish coalescing                       | `timeoutMs ?? 0` made `AbortSignal.timeout(0)` abort every request instantly          |
+| Keep a `try` around **only** the call that can fail in the way the `catch` handles                         | Scope of exception handlers              | Your own `unauthorized`/`rate_limited` errors were caught and re-wrapped as `network` |
+| `throw` only real errors: `const e = f(); if (e) throw e;`                                                 | Null checks; `only-throw-error`          | `throw errorFromResponse(...)` threw `null` on every 200                              |
+| Read the body **after** checking the status                                                                | —                                        | `response.json()` on a 401/500 HTML body threw a `SyntaxError` first                  |
+| Map names at the boundary in **both** directions: response fields _and_ query parameters                   | Anti-corruption layer                    | `status` → `company_status`; the typo `company_names_includes` is silently ignored    |
+| Truthiness drops real values: `if (0)` is false                                                            | Truthy/falsy; `!== undefined`            | `startIndex: 0` (the first page) would never be sent                                  |
+| A generic helper (`<S extends z.ZodType>` → `z.output<S>`) gives every method a typed result with no `any` | TypeScript generics                      | `schema?: any` caused 10 lint errors and untyped returns                              |
+| Let each caller decide what "not found" means; don't make the helper inspect which schema it got           | Separation of concerns                   | Comparing `schema === advancedSearchPageSchema` inside the helper                     |
+| A type annotation must be honest: `T \| null` can't go into a `T`                                          | Type narrowing                           | TS2719 "two different types with this name"; **read the last line** of the error      |
+| `??` can't help when the left side is never `null`: `Number(x)` always returns a number                    | Constant nullishness                     | `Number(header) ?? undefined` still logged `0` for a missing header                   |
+| Don't keep secrets longer than needed; build what you need from them once                                  | Least privilege                          | The raw key was stored on the client; now only the auth header is                     |
+| A client shouldn't read config; the caller injects it. Never import another package by relative path       | Dependency injection; package boundaries | `../../../config/src/index.js` inside `client.ts`                                     |
+| Copy-paste can bring in invisible characters                                                               | `no-irregular-whitespace`                | A non-breaking space on the logging line                                              |
+| `tsx -e` compiles to CommonJS, so no top-level `await`; wrap the code in an `async` function               | CJS vs ESM                               | The first smoke-test command failed                                                   |
+| A test is only proven when it **fails against the bug**                                                    | Mutation testing                         | The missing-header test was checked by putting the bug back                           |
+| Writing everything at once tangles bugs together; make **one test** pass at a time (`vitest -t "name"`)    | Test-driven development (TDD)            | The first client draft: 1 of 20 passing, three bugs hiding each other                 |
+
 ### Companies House quirks (checked against the live API)
 
 - **Advanced search** (`/advanced-search/companies`) filters by `sic_codes` and `company_status`
   on the server, returns up to 5,000 items per page, and each item includes `sic_codes`.
+- **`sic_codes` can be comma-joined or repeated;** both mean OR (62011 + 62012 → 129,973 hits).
 - **No matches is an HTTP 404 with an empty body,** not a 200 with `hits: 0`.
 - **Profile not found is a 404** with body `{ timestamp, message, request_id }`, not the documented
   `errors` array. Decide on 404 from the status code; never parse the body.
@@ -60,16 +85,15 @@ what it does, why, and what it costs.
   `remaining`), `x-ratelimit-reset` (absolute epoch seconds), `x-ratelimit-window` (`5m`).
 - **Auth:** HTTP Basic, API key as the username, empty password.
 
-## Part 2: the client (`client.ts`)
+## Part 2: the client, as built (`client.ts`)
 
-### What it has to do
+### Shape
 
-One private `request` function does the HTTP work. Two public methods use it:
+One private generic helper, `companiesHouseHttpClient<S>({ path, query, schema })`, does the HTTP
+work and returns `z.output<S> | null`, where `null` means "not found". Two public methods use it:
 
-- `advancedSearch(params)` returns `AdvancedSearchPage`. A 404 means "no matches", so it returns
-  `{ hits: 0, items: [] }`.
-- `getCompanyProfile(companyNumber)` returns `CompanyProfile | null`. A 404 means "no such company",
-  so it returns `null`.
+- `advancedSearch(query)` returns `AdvancedSearchPage`, turning `null` into `{ hits: 0, items: [] }`.
+- `getCompanyProfile(companyNumber)` returns `CompanyProfile | null`, passing `null` through.
 
 Same status code, two meanings: **each method decides what its own 404 means.**
 
@@ -83,75 +107,81 @@ Same status code, two meanings: **each method decides what its own 404 means.**
 | `baseUrl`   | `https://api.company-information.service.gov.uk` | Tests, and a sandbox if you ever need one                              |
 | `timeoutMs` | `10_000`                                         | Short in tests; tune after timing a `size=5000` search                 |
 
-### The request pipeline, step by step
+The `Authorization` header is built once in the constructor, and the raw key isn't stored.
 
-1. **Build the URL** with `new URL(path, baseUrl)` and `URLSearchParams`. Leave out parameters that
-   are `undefined`. **Experiment first:** in Postman, check whether advanced search wants
-   `sic_codes=62011,62012` or `sic_codes=62011&sic_codes=62012`, by comparing `hits`.
-2. **Auth header:** `Authorization: Basic ` + base64 of `` `${apiKey}:` `` (note the colon).
-   `Buffer.from(...).toString('base64')` works in Node.
-3. **Timeout:** pass `signal: AbortSignal.timeout(timeoutMs)` to `fetch`.
-4. **Call `fetch` inside `try`/`catch`.** If it throws, no response arrived:
-   - `err.name === 'TimeoutError'` → `CompaniesHouseError.timeout(where, err)`
-   - anything else → `CompaniesHouseError.network(where, err)`
-5. **Log once per request:** method, path, status, `durationMs`, and `x-ratelimit-remain`.
-   **Never** log headers wholesale, the `Authorization` value or the key.
-6. **404:** return a "not found" signal to the calling method; don't throw, and don't parse the body.
-7. **Other statuses:** `const err = errorFromResponse(status, response.headers, where)`; if not
-   `null`, throw it.
-8. **Parse the body:** `await response.json()` inside `try`/`catch` (invalid JSON →
-   `invalidResponse(where, err)`), then `schema.safeParse(body)` (failure →
-   `invalidResponse(where, result.error)`). The zod error is the cause, so the logs show the exact
-   field path.
+### The request pipeline
 
-`where` is `` `${method} ${path}` ``. The query string is safe to include, because the key travels
-in a header.
+1. **URL:** `new URL(path, baseUrl)`, then `url.search = query.toString()`. Each method maps its
+   own camelCase options to Companies House names, skipping `undefined` (not falsy) values.
+2. **Request:** `GET` with the prebuilt `Authorization` header and `AbortSignal.timeout(timeoutMs)`.
+3. **`fetch` inside a narrow `try`:** a `TimeoutError` → `timeout`; anything else → `network`.
+   Nothing else is inside the `try`.
+4. **Log once:** `method`, `path`, `status`, `durationMs` (rounded), and `rateLimitRemain`
+   (`undefined` when the header is missing). Never headers, the key or the auth value.
+5. **404** → return `null`. The body isn't read.
+6. **Other errors:** `const error = errorFromResponse(...); if (error) throw error;`
+7. **Body:** `response.json()` in its own `try` (invalid JSON → `invalidResponse`), then
+   `schema.safeParse(body)` (failure → `invalidResponse` with the `ZodError` as cause).
 
-### Testing it without the network
+### Failure modes and how each is handled
 
-- **Fake fetch:** a function that returns `new Response(JSON.stringify(fixture), { status, headers })`.
-  Wrap it in `vi.fn()` so you can inspect the URL and headers it was called with.
-- **The timeout gotcha:** a fake that never resolves _and ignores the signal_ will hang the test
-  forever. A realistic fake listens to `init.signal` and rejects when it aborts, the way real
-  `fetch` does. Use a small `timeoutMs` (e.g. 20).
-- **Capturing logs:** create pino with a custom destination (an object with a `write(line)` method
-  that pushes to an array), then assert on the parsed lines, including that the key never appears.
+| Failure                                     | Handling                                             | Retry? | Test                                     |
+| ------------------------------------------- | ---------------------------------------------------- | ------ | ---------------------------------------- |
+| No response within the timeout              | `timeout`, cause = `TimeoutError`                    | Yes    | `no response within timeoutMs → timeout` |
+| DNS failure / connection reset              | `network`, cause = the `TypeError`                   | Yes    | `fetch throwing … → network`             |
+| Bad or missing key (401/403)                | `unauthorized`                                       | No     | `401 → unauthorized`; errors tests       |
+| Rate limited (429)                          | `rate_limited`, `retryAt` = reset time, ≥ now        | Yes    | `429 → rate_limited …`; errors tests     |
+| Companies House outage (5xx)                | `server_error`                                       | Yes    | `500 → server_error`                     |
+| Our request is wrong (other 4xx)            | `http`, with `status`                                | No     | `400 → http`                             |
+| Search matches nothing (404, empty body)    | `{ hits: 0, items: [] }`                             | —      | `advanced search: 404 … no matches`      |
+| Company doesn't exist (404)                 | `null`                                               | —      | `profile: 404 means no such company`     |
+| 200 but not JSON                            | `invalid_response`                                   | No     | `200 with a body that is not JSON`       |
+| 200 but the wrong shape                     | `invalid_response`, cause = `ZodError`               | No     | `200 with a body that fails the schema`  |
+| Sparse data (missing SIC codes, address, …) | Parses; `sicCodes` defaults to `[]`                  | —      | schema tests                             |
+| Rate-limit header missing                   | `rateLimitRemain` omitted from the log, not `0`      | —      | `logs no rateLimitRemain when … missing` |
+| Key leaking into logs                       | Only the method, path, status and numbers are logged | —      | `never logs the API key …`               |
 
-### Test list
+## Part 3: what to revise
 
-| Case                                     | Expect                                                         |
-| ---------------------------------------- | -------------------------------------------------------------- |
-| Search, 200 with the real fixture        | Typed page; URL has the path and `sic_codes`                   |
-| Any request                              | `Authorization` is `Basic base64(key + ':')`                   |
-| Search, 404 with an empty body           | `{ hits: 0, items: [] }`                                       |
-| Profile, 200 with the real fixture       | Typed profile, with `etag`                                     |
-| Profile, 404                             | `null`                                                         |
-| Company number with odd characters       | It's URL-encoded in the path                                   |
-| 401 / 429 / 500 / 400                    | Throws `CompaniesHouseError` with the matching `kind`          |
-| `fetch` rejects with a `TypeError`       | `network`, with `cause` being that error                       |
-| `fetch` never resolves                   | `timeout` (small `timeoutMs`; fake respects the signal)        |
-| 200 with invalid JSON                    | `invalid_response`                                             |
-| 200 with a body missing `company_number` | `invalid_response`, with a zod error as `cause`                |
-| Logs                                     | Contain status and `x-ratelimit-remain`; never contain the key |
+### The six ideas that matter most
 
-### Suggested order, with review checkpoints
+Revise these first; they come back in every later integration (Hunter, Apollo, HubSpot) and in
+interviews.
 
-1. **Options and URL building.** Write the tests for the URL and auth header first.
-2. **Status handling:** 404 per method, then `errorFromResponse`.
-3. **Failures before a response:** timeout and network.
-4. **Parsing:** invalid JSON, schema mismatch. → _Checkpoint 3 review_
-5. **Logging**, and the public exports in `packages/integrations/src/index.ts` (the client,
-   `CompaniesHouseError` and the output types). → _Checkpoint 4 review_
-6. **Manual smoke test** against the real API: one `advancedSearch` for SIC `62012` and one
-   `getCompanyProfile('NI642876')`. Check the logs show `x-ratelimit-remain` and no key.
+1. **Validate at the boundary, from real data.** Fixtures are recorded responses; schemas are
+   written until they parse; output is camelCase and typed. _Revise:_ `schemas.ts`, the schema tests.
+2. **Classify errors by what the caller should do.** One error class, a `kind`, a `RETRYABLE`
+   table, `cause` vs `status`. _Revise:_ `errors.ts` and the worked example.
+3. **Absolute times vs delays.** `x-ratelimit-reset` is a moment, not a duration; seconds vs
+   milliseconds; clamping. _Revise:_ `retryAtFrom` and its tests.
+4. **Dependency injection makes code testable and extensible.** `fetch`, `logger` and `apiKey` come
+   in from outside, which is how the tests run offline and how #10 and #11 will plug in.
+   _Revise:_ the constructor, and `setup()` in `client.test.ts`.
+5. **Narrow `try` blocks.** Catch only the failure you mean to translate. _Revise:_ the `fetch`
+   call in `client.ts`, and the "Client" lessons table above.
+6. **JavaScript's sharp edges:** `??` vs `||`, truthiness, operator precedence, `Number(null)`.
+   _Revise:_ the "Client" and "Errors" lessons tables.
 
-### Read first (~45 min)
+### Exercises (on a scratch branch)
 
-- MDN: "Using the Fetch API", `Response`, `Headers`, `URL` and `URLSearchParams`.
-- MDN: `AbortSignal.timeout()`. Note it rejects with a `DOMException` named `'TimeoutError'`.
-- MDN: "HTTP authentication" → the Basic scheme.
-- pino docs: "child loggers", and the `destination` argument (for capturing logs in tests).
-- Vitest docs: `vi.fn()` and mock call inspection (`mock.calls`).
+1. **Put a bug back, and predict which tests fail before you run them.** Try each:
+   `fetch` instead of `this.fetch`; widen the `try` to cover the status checks; `if (startIndex)`;
+   `throw errorFromResponse(...)` without the null check. Were your predictions right?
+2. **Add a third endpoint** (e.g. `GET /company/{number}/officers`, needed in weeks 3–4): a fixture,
+   a schema, a method and tests. Notice how little of the helper changes; that's the payoff of the
+   generic helper and "each method decides what 404 means".
+3. **Wrap `fetch`** with a function that logs every URL it's called with, and pass it in as the
+   `fetch` option. That's the shape #10 and #11 will take.
+4. **Explain the 429 path end to end, out loud:** header → `retryAtFrom` → `rateLimited` →
+   `retryable` → what #9's BullMQ job will do with it.
+
+### Read again (~1 hour)
+
+- MDN: "Using the Fetch API", `AbortSignal.timeout()`, `URL`, `URLSearchParams`.
+- MDN: "Nullish coalescing operator (??)" and "Operator precedence" (find `??` and `+` in the table).
+- TypeScript Handbook: "Generics", and "Narrowing" (for `T | null`).
+- zod docs: `safeParse`, `.default()`, `.extend()`, and `z.output`.
+- Microsoft Azure Architecture Center: "Retry pattern".
 
 ## Self-check (answer out loud)
 
@@ -161,3 +191,7 @@ in a header.
 4. What would go wrong if `retryAt` added `now` to `x-ratelimit-reset`?
 5. Why inject `fetch` instead of importing it, and which two later issues depend on that?
 6. Why must a fake `fetch` in a timeout test listen to the abort signal?
+7. Why is the `try` around `fetch` so small? What happened when it wasn't?
+8. Why does the client take an `apiKey` instead of reading `COMPANIES_HOUSE_API_KEY` itself?
+9. Why is `rateLimitRemain` omitted, rather than `0`, when the header is missing?
+10. What does the generic `<S extends z.ZodType>` buy you over `schema: any`?
