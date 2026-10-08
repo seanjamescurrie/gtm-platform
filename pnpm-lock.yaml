@@ -53,6 +53,18 @@ importers:
 
   apps/worker:
     dependencies:
+      '@gtm/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@gtm/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@gtm/infra':
+        specifier: workspace:*
+        version: link:../../packages/infra
+      '@gtm/integrations':
+        specifier: workspace:*
+        version: link:../../packages/integrations
       bullmq:
         specifier: 6.3.11
         version: 6.3.11(ioredis@5.11.1)(pg@8.23.0)
@@ -62,6 +74,9 @@ importers:
       pino:
         specifier: 10.3.1
         version: 10.3.1
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
 
   packages/config:
     dependencies:
