@@ -9,6 +9,8 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "bullmq": "6.3.11",
+    "ioredis": "5.11.1",
     "pino": "10.3.1"
   }
 }
