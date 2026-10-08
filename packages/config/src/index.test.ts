@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getApiPort, getCompaniesHouseApiKey, getDatabaseUrl } from './index.js';
+import { getApiPort, getCompaniesHouseApiKey, getDatabaseUrl, getRedisUrl } from './index.js';
 
 describe('getApiPort', () => {
   it('defaults to 3000 when API_PORT is unset or empty', () => {
@@ -46,6 +46,38 @@ describe('getDatabaseUrl', () => {
       message = (err as Error).message;
     }
     expect(message).toMatch(/^DATABASE_URL /);
+    expect(message).not.toContain('s3cret');
+  });
+});
+
+describe('getRedisUrl', () => {
+  it('accepts redis and rediss (TLS) URLs', () => {
+    expect(getRedisUrl({ REDIS_URL: 'redis://localhost:6379' })).toBe('redis://localhost:6379');
+    expect(getRedisUrl({ REDIS_URL: 'rediss://:p@cache.example.com:6379/0' })).toBe(
+      'rediss://:p@cache.example.com:6379/0',
+    );
+  });
+
+  it('fails clearly when unset or empty', () => {
+    expect(() => getRedisUrl({})).toThrow('REDIS_URL is not set');
+    expect(() => getRedisUrl({ REDIS_URL: '' })).toThrow('REDIS_URL is not set');
+  });
+
+  it.each(['not a url', 'localhost:6379', 'http://localhost:6379', 'postgres://localhost/gtm'])(
+    'rejects REDIS_URL=%j',
+    (raw) => {
+      expect(() => getRedisUrl({ REDIS_URL: raw })).toThrow(/^REDIS_URL must be a redis/);
+    },
+  );
+
+  it('never includes the value (and its password) in the error', () => {
+    let message = '';
+    try {
+      getRedisUrl({ REDIS_URL: 'http://user:s3cret@host:6379' });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toMatch(/^REDIS_URL /);
     expect(message).not.toContain('s3cret');
   });
 });
