@@ -56,6 +56,112 @@ every answer is "repeat some work", never "skip some work".
 
 Change the function to `async` and delete the `void deps; void data;` lines when you start.
 
+### Directions: the function, line by line
+
+The finished function is seven statements, in this order. Each one is a single line or two.
+
+1. **Unpack the job data.** Destructure `sicCodes`, `status`, `size`, `startIndex` and `maxPages`
+   from `data`.
+2. **Fetch.** `await deps.client.advancedSearch(...)` with an object holding exactly four fields:
+   `sicCodes`, `status`, `size`, `startIndex`. Not the whole `data` object: it also carries
+   `runId` and `maxPages`, which the client doesn't take, and the first test checks for an exact
+   match. Keep the result in a variable (`page` reads well).
+3. **Map.** Turn `page.items` into rows with `.map(toNewCompany)`. Import `toNewCompany` from
+   `./map.js`.
+4. **Upsert.** `await deps.upsert(rows)` and keep the number it returns as `written`.
+5. **Decide whether there is a next page.** Three named booleans, then one result:
+   - the page is full: the number of items equals `size`;
+   - there are hits left: `startIndex` plus the number of items is less than `page.hits`;
+   - the cap isn't reached: this page's number is less than `maxPages`, where this page's number
+     is `startIndex / size + 1` (start index 0 is page 1).
+
+   If all three are true, `nextStartIndex` is `startIndex + size`. Otherwise it is `null`.
+
+6. **Enqueue.** If `nextStartIndex` is not `null`, `await deps.enqueueNext(...)` with a copy of
+   `data` whose `startIndex` is replaced (`{ ...data, startIndex: nextStartIndex }`).
+7. **Log and return.** One `deps.log.info({ ...fields }, 'message')`, then return
+   `{ written, hits: page.hits, nextStartIndex }`.
+
+Rules that hold for the whole function:
+
+- Every call on `deps` is awaited.
+- No `try`/`catch` anywhere.
+- No `console.log`; use `deps.log`.
+- Nothing imported from `bullmq`.
+
+### Reference: the same shape in another domain
+
+This is a complete, working processor for a different job: syncing orders from a shop API that
+pages by **page number** and reports **total pages**. It has the same seven steps. Read it for the
+shape, then write yours; the paging arithmetic is different, so it can't be copied across.
+
+```ts
+interface SyncOrdersData {
+  shopId: string;
+  page: number; // 1-based
+  perPage: number;
+  maxPages: number;
+}
+
+interface SyncOrdersResult {
+  saved: number;
+  nextPage: number | null;
+}
+
+interface SyncOrdersDeps {
+  api: {
+    listOrders(query: { shopId: string; page: number; perPage: number }): Promise<{
+      orders: ApiOrder[];
+      totalPages: number;
+    }>;
+  };
+  save: (rows: readonly OrderRow[]) => Promise<number>;
+  enqueueNext: (data: SyncOrdersData) => Promise<unknown>;
+  log: Logger;
+}
+
+export async function processOrdersPage(
+  deps: SyncOrdersDeps,
+  data: SyncOrdersData,
+): Promise<SyncOrdersResult> {
+  // 1. Unpack.
+  const { shopId, page, perPage, maxPages } = data;
+
+  // 2. Fetch exactly this page. Only the fields the API takes; no try/catch, so an error fails the job.
+  const result = await deps.api.listOrders({ shopId, page, perPage });
+
+  // 3 + 4. Map to rows, then save. `saved` is what the database reports, not what the API sent.
+  const saved = await deps.save(result.orders.map(toOrderRow));
+
+  // 5. Is there a next page? Each reason to stop has a name.
+  const isFullPage = result.orders.length === perPage;
+  const hasPagesLeft = page < result.totalPages;
+  const underCap = page < maxPages;
+  const nextPage = isFullPage && hasPagesLeft && underCap ? page + 1 : null;
+
+  // 6. Enqueue after saving, so a crash between the two repeats this page instead of skipping it.
+  if (nextPage !== null) {
+    await deps.enqueueNext({ ...data, page: nextPage });
+  }
+
+  // 7. One log line, then the result.
+  deps.log.info({ page, saved, nextPage }, 'orders page synced');
+  return { saved, nextPage };
+}
+```
+
+How the example maps onto yours:
+
+| The orders example              | Your ingest processor                                               |
+| ------------------------------- | ------------------------------------------------------------------- |
+| `page` (1, 2, 3…)               | `startIndex` (0, `size`, 2 × `size`…); there is no page field       |
+| `page + 1`                      | `startIndex + size`                                                 |
+| `totalPages` (a count of pages) | `hits` (a count of **items**), so compare it with items seen so far |
+| `page < maxPages`               | work the page number out from `startIndex` and `size` first         |
+| `result.orders`, `toOrderRow`   | `page.items`, `toNewCompany`                                        |
+| `deps.api`, `deps.save`         | `deps.client`, `deps.upsert`                                        |
+| returns `{ saved, nextPage }`   | returns `{ written, hits, nextStartIndex }`                         |
+
 ### Step 2: one test at a time
 
 Run a single test with:
