@@ -148,6 +148,17 @@ describe('processIngestPage', () => {
       expect(result.nextStartIndex).toBeNull();
     });
 
+    it('stops at the last hit even when the upsert wrote fewer rows than the page held', async () => {
+      // Items 6, 7 and 8 of 9, but the database reports 2 written. The page count decides, not the write count.
+      const { deps, upsert, enqueueNext } = setup(page(3, 9));
+      upsert.mockResolvedValue(2);
+
+      const result = await processIngestPage(deps, data({ startIndex: 6 }));
+
+      expect(enqueueNext).not.toHaveBeenCalled();
+      expect(result.nextStartIndex).toBeNull();
+    });
+
     it('stops after maxPages pages, counted from start index 0', async () => {
       // size 3, maxPages 2: start index 0 is page 1, start index 3 is page 2 and the last.
       const { deps, enqueueNext } = setup(page(3, 100));
