@@ -13,7 +13,7 @@ why it's in that order, and what happens if the process dies on that line.
 - [x] Checkpoint 1: `getRedisUrl` in `@gtm/config`
 - [x] Checkpoint 2: `createRedisConnection` in `@gtm/infra`; `bullmq` and `ioredis` installed
 - [x] Checkpoint 3: `job.ts`, `map.ts`, `enqueue.ts`
-- [ ] Checkpoint 4: `processIngestPage` (hand-written, 14 tests)
+- [x] Checkpoint 4: `processIngestPage` (hand-written, 16 tests)
 - [ ] Checkpoint 5: error translation (hand-written)
 - [ ] Checkpoint 6: worker wiring, shutdown, CLI
 - [ ] Checkpoint 7: integration test, Valkey in CI
@@ -287,17 +287,114 @@ be asked about in an interview.
 | after the upsert, before the enqueue           |                   |                     |                     |
 | after the enqueue, before the job is completed |                   |                     |                     |
 
-### Preview: checkpoint 5, error translation
+## Part 1b: how to approach the error translation (checkpoint 5)
 
-A second small function decides what BullMQ should do with a thrown error. You'll use
-`error.retryable` and `error.kind` from `CompaniesHouseError`, never status codes:
+### What it is
 
-- Not retryable (`unauthorized`, `invalid_response`, `http`): fail now, no more attempts.
-- `rate_limited`: pause the whole queue until `retryAt`, without using up an attempt.
-- Everything else, including errors that aren't from Companies House: let BullMQ retry with backoff.
+`handleIngestFailure(error, deps)` in `apps/worker/src/ingest/failure.ts`. The worker will call
+it from a `catch` around `processIngestPage` (wired at checkpoint 6). It **always throws**: the
+error it throws is the instruction to BullMQ.
 
-Before then, read the BullMQ docs pages "Retrying failing jobs", "Stop retrying jobs" and
-"Rate limiting" (the manual rate-limit section), and re-read exercise 4 in the #8 learning path.
+| What was thrown                                                | What you throw                          | What BullMQ then does                               |
+| -------------------------------------------------------------- | --------------------------------------- | --------------------------------------------------- |
+| `CompaniesHouseError`, `retryable` false                       | `new UnrecoverableError(error.message)` | Fails the job now; no more attempts                 |
+| `CompaniesHouseError`, kind `rate_limited`                     | `Worker.RateLimitError()` after a pause | Puts the job back to waiting; no attempt is used up |
+| `CompaniesHouseError`, other retryable (timeout, network, 5xx) | the same error                          | Retries with backoff (`INGEST_JOB_OPTIONS`)         |
+| Anything else (Postgres down, a bug, a non-`Error` value)      | the same value                          | Retries with backoff                                |
+
+This is self-check question 3 from the #8 doc: the job knows what to do from `error.retryable`
+and `error.kind`, never from a status code.
+
+### Read first (20 min)
+
+- `packages/integrations/src/companies-house/errors.ts`: `kind`, `retryable`, `retryAt`.
+- BullMQ docs: "Retrying failing jobs", "Stop retrying jobs" (`UnrecoverableError`), and the
+  manual rate-limit section of "Rate limiting" (`worker.rateLimit` and `Worker.RateLimitError`).
+- `failure.test.ts`, top to bottom. `NOW` is pinned, so every duration is an exact number.
+
+### Directions: the function, line by line
+
+Imports you'll need: `CompaniesHouseError` from `@gtm/integrations`; `UnrecoverableError` and
+`Worker` from `bullmq`. Make the function `async` and delete the two `void` lines.
+
+1. **Not a Companies House error?** If `error` is not an `instanceof CompaniesHouseError`,
+   `throw error`. Do this first: after it, TypeScript knows `error` has `kind` and `retryAt`.
+2. **Rate limited?** If `error.kind === 'rate_limited'`:
+   - work out the pause in milliseconds: `retryAt` as epoch milliseconds, minus
+     `deps.now()` as epoch milliseconds;
+   - never pause for less than `MIN_RATE_LIMIT_PAUSE_MS` (`Math.max`);
+   - `await deps.pauseQueue(ms)`;
+   - `throw Worker.RateLimitError()`.
+3. **Not retryable?** If `!error.retryable`, `throw new UnrecoverableError(error.message)`.
+4. **Otherwise** `throw error`.
+
+Things to get right:
+
+- **Order matters.** `rate_limited` is retryable, so check it before the `retryable` test, or it
+  falls through to step 4 and is retried with backoff instead of pausing the queue.
+- **`retryAt` is a moment, not a duration** (#8). `pauseQueue` wants a duration. Subtract.
+- **`retryAt` is typed `Date | undefined`.** A `rate_limited` error always has one, but the
+  compiler doesn't know that. Decide what the pause is when it's missing, and say why in a comment.
+- **Use `deps.now()`, never `new Date()`**, or the tests can't check exact numbers.
+- **`await` the pause.** If it rejects (Valkey down), that error should travel out; one test
+  checks this, and it passes without a `try` if you awaited.
+- **Don't log the whole error for a 429 at `error` level.** A 429 is expected behaviour; one
+  `warn` line with the pause length is enough. Logging is untested.
+
+### Reference: the same shape in another domain
+
+A handler for a payment job. Same four branches, different error type and different way of
+saying "wait": this API gives a **number of seconds**, so there's no subtraction, and it has no
+minimum.
+
+```ts
+export async function handlePaymentFailure(
+  error: unknown,
+  deps: PaymentFailureDeps,
+): Promise<never> {
+  // 1. Not ours to classify: let the queue retry it the normal way.
+  if (!(error instanceof PaymentApiError)) throw error;
+
+  // 2. The provider told every caller to back off. Pause the queue, then hand the job back.
+  if (error.code === 'too_many_requests') {
+    await deps.pauseQueue(error.retryAfterSeconds * 1_000);
+    throw Worker.RateLimitError();
+  }
+
+  // 3. Retrying can't fix this (card declined, bad request): fail now and keep the reason.
+  if (!error.isTransient) throw new UnrecoverableError(error.message);
+
+  // 4. Transient (timeout, 5xx): rethrow unchanged so the queue retries with backoff.
+  throw error;
+}
+```
+
+| The payment example                  | Your handler                                         |
+| ------------------------------------ | ---------------------------------------------------- |
+| `PaymentApiError`                    | `CompaniesHouseError`                                |
+| `error.code === 'too_many_requests'` | `error.kind === 'rate_limited'`                      |
+| `retryAfterSeconds * 1_000`          | `retryAt` minus now, in milliseconds, with a minimum |
+| `error.isTransient`                  | `error.retryable`                                    |
+
+### Suggested test order
+
+```
+pnpm exec vitest apps/worker/src/ingest/failure.test.ts -t "part of the test name"
+```
+
+1. "everything else" (2 tests): step 1.
+2. "errors worth retrying" (3 tests): step 4. These may already pass after step 1; say why.
+3. "retrying cannot fix" (4 tests): step 3.
+4. "rate limited" (5 tests): step 2. Do "pauses the whole queue until retryAt" first, then the
+   minimum, then the error type.
+
+Then put two bugs back and predict the failures: move the `retryable` check above the
+`rate_limited` check; and replace `deps.now()` with `new Date()`.
+
+### Finish
+
+- 14 more tests pass; `pnpm format && pnpm lint && pnpm typecheck` are clean.
+- Commit as `add ingest failure handling (#9)`, then tell Claude for review.
 
 ## Self-check (answer out loud)
 
@@ -311,3 +408,7 @@ Before then, read the BullMQ docs pages "Retrying failing jobs", "Stop retrying 
 6. Why does `written` come from the upsert and not from the page?
 7. Why does the processor take `enqueueNext` as a function instead of a BullMQ queue?
 8. What does `maxPages` protect you from, given about 130,000 matching companies?
+9. Is `enqueueNext` recursion? What is the difference, and what does it buy you when a worker dies?
+10. Why must the `rate_limited` check come before the `retryable` check?
+11. Why does a 429 pause the whole queue rather than only delaying the one job?
+12. What does `UnrecoverableError` save you from, for a wrong API key and 5 attempts with backoff?
