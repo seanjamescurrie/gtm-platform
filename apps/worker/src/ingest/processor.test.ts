@@ -106,6 +106,17 @@ describe('processIngestPage', () => {
       const enqueueOrder = enqueueNext.mock.invocationCallOrder[0] ?? -Infinity;
       expect(upsertOrder).toBeLessThan(enqueueOrder);
     });
+    it('pages by what Companies House returned, not by what the upsert wrote', async () => {
+      // A full page of 3 where the database reports 2 rows written (the page repeated a company).
+      // The next page still starts one full page on, and the chain must not stop.
+      const { deps, upsert, enqueueNext } = setup(page(3, 100));
+      upsert.mockResolvedValue(2);
+
+      const result = await processIngestPage(deps, data());
+
+      expect(enqueueNext).toHaveBeenCalledExactlyOnceWith(data({ startIndex: 3 }));
+      expect(result).toEqual({ written: 2, hits: 100, nextStartIndex: 3 });
+    });
   });
 
   describe('stopping', () => {
