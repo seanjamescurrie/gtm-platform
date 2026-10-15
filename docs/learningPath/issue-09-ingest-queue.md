@@ -14,7 +14,7 @@ why it's in that order, and what happens if the process dies on that line.
 - [x] Checkpoint 2: `createRedisConnection` in `@gtm/infra`; `bullmq` and `ioredis` installed
 - [x] Checkpoint 3: `job.ts`, `map.ts`, `enqueue.ts`
 - [x] Checkpoint 4: `processIngestPage` (hand-written, 16 tests)
-- [ ] Checkpoint 5: error translation (hand-written)
+- [x] Checkpoint 5: error translation (hand-written, 15 tests)
 - [ ] Checkpoint 6: worker wiring, shutdown, CLI
 - [ ] Checkpoint 7: integration test, Valkey in CI
 - [ ] Checkpoint 8: live run of 500+ companies; Parts 2 and 3 of this doc

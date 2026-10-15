@@ -2,7 +2,12 @@ import { CompaniesHouseError } from '@gtm/integrations';
 import { RateLimitError, UnrecoverableError } from 'bullmq';
 import { pino } from 'pino';
 import { describe, expect, it, vi } from 'vitest';
-import { handleIngestFailure, MIN_RATE_LIMIT_PAUSE_MS, type IngestFailureDeps } from './failure.js';
+import {
+  handleIngestFailure,
+  MIN_RATE_LIMIT_PAUSE_MS,
+  UNKNOWN_RESET_PAUSE_MS,
+  type IngestFailureDeps,
+} from './failure.js';
 
 const WHERE = 'GET /advanced-search/companies';
 const NOW = new Date('2026-10-08T12:00:00Z');
@@ -82,6 +87,17 @@ describe('handleIngestFailure', () => {
       await handleIngestFailure(error, deps).catch(() => undefined);
 
       expect(pauseQueue).toHaveBeenCalledExactlyOnceWith(MIN_RATE_LIMIT_PAUSE_MS);
+    });
+
+    it('pauses for a full rate-limit window when retryAt is missing', async () => {
+      const { deps, pauseQueue } = setup();
+      const error = CompaniesHouseError.rateLimited(WHERE, secondsFromNow(90));
+      // rateLimited() always sets retryAt, so remove it to reach the branch the type still allows.
+      Object.defineProperty(error, 'retryAt', { value: undefined });
+
+      await handleIngestFailure(error, deps).catch(() => undefined);
+
+      expect(pauseQueue).toHaveBeenCalledExactlyOnceWith(UNKNOWN_RESET_PAUSE_MS);
     });
 
     it('rethrows the pause failure if the queue cannot be paused, so the job retries the normal way', async () => {

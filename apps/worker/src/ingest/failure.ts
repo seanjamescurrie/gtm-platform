@@ -1,7 +1,13 @@
+import { CompaniesHouseError } from '@gtm/integrations';
+import { UnrecoverableError, Worker } from 'bullmq';
 import type { Logger } from 'pino';
 
 // A 429 whose reset time has already passed still pauses briefly, so the retry isn't instant.
 export const MIN_RATE_LIMIT_PAUSE_MS = 1_000;
+
+// rateLimited() always sets retryAt, but the type allows it to be missing. If it ever is, assume the
+// worst and wait out a full Companies House rate-limit window (matches the default in errors.ts).
+export const UNKNOWN_RESET_PAUSE_MS = 5 * 60_000;
 
 export interface IngestFailureDeps {
   // Stops the whole queue handing out jobs for this many milliseconds (BullMQ's `worker.rateLimit`).
@@ -19,9 +25,20 @@ export interface IngestFailureDeps {
  * - Rate limited: pause the queue until `retryAt`, then throw `Worker.RateLimitError()` (job goes back to waiting).
  * - Anything else: rethrow the same error (BullMQ retries with backoff).
  */
-export function handleIngestFailure(error: unknown, deps: IngestFailureDeps): Promise<never> {
-  // Hand-written (#9, checkpoint 5): make failure.test.ts pass, one test at a time.
-  void error;
-  void deps;
-  return Promise.reject(new Error('handleIngestFailure is not implemented yet'));
+export async function handleIngestFailure(error: unknown, deps: IngestFailureDeps): Promise<never> {
+  if (!(error instanceof CompaniesHouseError)) throw error;
+
+  if (error.kind === 'rate_limited') {
+    const pause = Math.max(
+      error.retryAt ? error.retryAt.getTime() - deps.now().getTime() : UNKNOWN_RESET_PAUSE_MS,
+      MIN_RATE_LIMIT_PAUSE_MS,
+    );
+    deps.log.warn({ pauseMs: pause }, 'rate limited by companies house, pausing queue');
+    await deps.pauseQueue(pause);
+    throw Worker.RateLimitError();
+  }
+
+  if (!error.retryable) throw new UnrecoverableError(error.message);
+
+  throw error;
 }
