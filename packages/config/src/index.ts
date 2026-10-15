@@ -44,3 +44,19 @@ export function getCompaniesHouseApiKey(env: NodeJS.ProcessEnv = process.env): s
   }
   return key.data;
 }
+
+// rediss:// is Redis over TLS, which ElastiCache for Valkey uses in production.
+const redisUrlSchema = z.url({
+  protocol: /^rediss?$/,
+  error: 'must be a redis:// or rediss:// URL',
+});
+
+export function getRedisUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const result = redisUrlSchema.safeParse(env.REDIS_URL);
+  if (!result.success) {
+    // Never echo the value: it can contain a password.
+    const reason = env.REDIS_URL ? (result.error.issues[0]?.message ?? 'invalid') : 'is not set';
+    throw new Error(`REDIS_URL ${reason}`);
+  }
+  return result.data;
+}

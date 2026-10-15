@@ -8,3 +8,4 @@ engineStrict: true
 # pnpm blocks dependency install scripts by default; allow only the ones we have reviewed.
 allowBuilds:
   esbuild: true # installs the platform binary used by tsx
+  msgpackr-extract: false # optional native speed-up for BullMQ's msgpackr; the pure-JS fallback is enough
