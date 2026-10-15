@@ -21,6 +21,7 @@ services:
       retries: 10
 
   # Valkey (Redis fork, same protocol) to match ElastiCache for Valkey in production.
+  # Keep in sync with the valkey service image in .github/workflows/ci.yml.
   redis:
     image: valkey/valkey:8.1.10-alpine
     # noeviction: BullMQ stores jobs as keys; evicting them under memory pressure silently loses jobs.

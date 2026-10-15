@@ -60,6 +60,8 @@ export interface IngestWorkerOptions {
   db: Db;
   log: Logger;
   now?: () => Date;
+  // Must match the queue's prefix (see createIngestQueue).
+  prefix?: string;
 }
 
 export function createIngestWorker({
@@ -69,6 +71,7 @@ export function createIngestWorker({
   db,
   log,
   now = () => new Date(),
+  prefix,
 }: IngestWorkerOptions): IngestWorker {
   // `worker` is only used inside pauseQueue, which runs after construction, so referring to it here is safe.
   const handler = createIngestJobHandler({
@@ -85,6 +88,7 @@ export function createIngestWorker({
     handler,
     {
       connection,
+      ...(prefix ? { prefix } : {}),
       // One request at a time until the shared rate limiter (#10) exists.
       concurrency: 1,
     },

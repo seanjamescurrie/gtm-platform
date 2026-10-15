@@ -16,7 +16,7 @@ why it's in that order, and what happens if the process dies on that line.
 - [x] Checkpoint 4: `processIngestPage` (hand-written, 16 tests)
 - [x] Checkpoint 5: error translation (hand-written, 15 tests)
 - [x] Checkpoint 6: worker wiring, shutdown, CLI (smoke run: 2 pages, 40 rows, re-run made no calls)
-- [ ] Checkpoint 7: integration test, Valkey in CI
+- [x] Checkpoint 7: integration test, Valkey in CI
 - [ ] Checkpoint 8: live run of 500+ companies; Parts 2 and 3 of this doc
 
 ## Part 1: how to approach the processor

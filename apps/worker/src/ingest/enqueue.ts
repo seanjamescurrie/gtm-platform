@@ -12,8 +12,12 @@ import {
 
 export type IngestQueue = Queue<IngestPageData, IngestPageResult>;
 
-export function createIngestQueue(connection: RedisConnection): IngestQueue {
-  return new Queue(INGEST_QUEUE_NAME, { connection });
+// `prefix` namespaces the queue's Valkey keys; integration tests use a unique one so they can't touch real jobs.
+export function createIngestQueue(
+  connection: RedisConnection,
+  { prefix }: { prefix?: string } = {},
+): IngestQueue {
+  return new Queue(INGEST_QUEUE_NAME, { connection, ...(prefix ? { prefix } : {}) });
 }
 
 /**

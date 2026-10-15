@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-// Integration tests need `docker compose up -d --wait`. Kept separate so `pnpm test` stays Docker-free.
+// Integration tests need `docker compose up -d --wait` (Postgres and Valkey). Kept separate so `pnpm test` stays Docker-free.
 export default defineConfig({
   test: {
     include: ['{apps,packages}/*/src/**/*.int.test.ts'],
