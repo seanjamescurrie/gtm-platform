@@ -15,7 +15,7 @@ why it's in that order, and what happens if the process dies on that line.
 - [x] Checkpoint 3: `job.ts`, `map.ts`, `enqueue.ts`
 - [x] Checkpoint 4: `processIngestPage` (hand-written, 16 tests)
 - [x] Checkpoint 5: error translation (hand-written, 15 tests)
-- [ ] Checkpoint 6: worker wiring, shutdown, CLI
+- [x] Checkpoint 6: worker wiring, shutdown, CLI (smoke run: 2 pages, 40 rows, re-run made no calls)
 - [ ] Checkpoint 7: integration test, Valkey in CI
 - [ ] Checkpoint 8: live run of 500+ companies; Parts 2 and 3 of this doc
 
