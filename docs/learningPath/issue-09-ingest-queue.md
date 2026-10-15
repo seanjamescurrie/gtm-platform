@@ -1,8 +1,8 @@
 # Learning path: #9 BullMQ ingest queue
 
-Companion to issue #9. Part 1 is the outline for the part you write by hand: the page processor
-(checkpoint 4) and its error translation (checkpoint 5). Parts 2 and 3 (the queue as built, and
-what to revise) are filled in at checkpoint 8.
+Companion to issue #9. Part 1 is the outline for the parts written by hand: the page processor
+(checkpoint 4) and its error translation (checkpoint 5). Part 2 records what each piece taught.
+Part 3 describes the queue as built, with its failure modes. Part 4 is what to revise.
 
 **Goal:** explain every line of `apps/worker/src/ingest/processor.ts` in 30 seconds: what it does,
 why it's in that order, and what happens if the process dies on that line.
@@ -17,7 +17,7 @@ why it's in that order, and what happens if the process dies on that line.
 - [x] Checkpoint 5: error translation (hand-written, 15 tests)
 - [x] Checkpoint 6: worker wiring, shutdown, CLI (smoke run: 2 pages, 40 rows, re-run made no calls)
 - [x] Checkpoint 7: integration test, Valkey in CI
-- [ ] Checkpoint 8: live run of 500+ companies; Parts 2 and 3 of this doc
+- [x] Checkpoint 8: live run (2026-10-15): 2 pages, 1,000 companies, no 429; a same-day re-run made no calls
 
 ## Part 1: how to approach the processor
 
@@ -396,6 +396,162 @@ Then put two bugs back and predict the failures: move the `retryable` check abov
 - 14 more tests pass; `pnpm format && pnpm lint && pnpm typecheck` are clean.
 - Commit as `add ingest failure handling (#9)`, then tell Claude for review.
 
+## Part 2: lessons
+
+### The processor and failure handler (hand-written)
+
+| Lesson                                                                                                | Name to search                      | Where it bit us                                                                                |
+| ----------------------------------------------------------------------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Decide paging from what the **API returned**, never from what the **database wrote**                  | Separation of concerns              | `written === items.length` and `startIndex + written`: one repeated company stops the chain    |
+| Work a decision out **once**, in one variable; every use reads that variable                          | Single source of truth; DRY         | The next-page condition was written three times, and the copies disagreed                      |
+| `getMilliseconds()` is the 0–999 part of the clock; `getTime()` is milliseconds since 1970            | `Date.prototype.getTime`            | Every 429 paused for the 1 s minimum instead of until the reset                                |
+| A test can pass **by accident** when the bug and the expected value coincide; use distinctive numbers | Mutation testing; test oracles      | Both "minimum pause" tests passed with the `getMilliseconds` bug; only the 90 s test caught it |
+| Log the value that is **used**, not an intermediate one                                               | Observability                       | The 429 log reported `-30000` while the queue paused for 1,000 ms                              |
+| A "can't happen" branch the type allows still needs a **written-down** decision                       | Total functions; defensive defaults | Missing `retryAt` fell back to `0` with no comment; now a full 5-minute window                 |
+| Check `!== null`, not truthiness, for a number that might be `null`                                   | Truthy/falsy                        | `if (nextPage)`: safe only because the value is never `0`                                      |
+| Order checks from **most specific** to most general                                                   | Guard clauses                       | `rate_limited` is retryable, so it must be checked before `retryable`                          |
+| "All tests pass" means the **whole** suite, on **saved** files                                        | —                                   | A filtered or unsaved run looked green while 14 tests failed on disk                           |
+
+### Queues and the plumbing
+
+| Lesson                                                                                                           | Name to search                          | Where it showed up                                                         |
+| ---------------------------------------------------------------------------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------- |
+| A job that enqueues its successor is a **job chain**, not recursion: the state lives in Valkey, not on the stack | Continuation; job chaining              | `enqueueNext` writes a record and returns; the worker runs it later        |
+| Idempotency has two layers: the **job id** stops a page running twice; the **upsert** absorbs it if it does      | Idempotency key; at-least-once delivery | `ingestJobId`; `upsertCompanies` on `company_number`                       |
+| Dedupe lives where the **key** lives. Emptying Postgres doesn't reset Valkey                                     | Deduplication window                    | Truncating `companies` then re-running the same run id did nothing         |
+| Data read back from a queue is a boundary: validate it like an API response                                      | Schema validation at boundaries         | `ingestPageDataSchema` in the producer and in the job handler              |
+| Bad input should fail **once**, not five times                                                                   | Poison message                          | Invalid job data throws `UnrecoverableError` before any API call           |
+| A rate limit that belongs to the **API key** should pause the **queue**, not one job                             | Backpressure; global rate limiting      | `worker.rateLimit(ms)` + `Worker.RateLimitError()`                         |
+| Blocking consumers and fail-fast producers want different connection settings                                    | `maxRetriesPerRequest`                  | `createRedisConnection(url, { forWorker })`                                |
+| An `EventEmitter` with no `error` listener crashes the process on the first `error`                              | Node.js `EventEmitter` error events     | `worker.on('error', …)`                                                    |
+| Graceful shutdown means **finish the active job**, then close in reverse order                                   | Graceful shutdown; SIGTERM              | `worker.close()` before the queue, Postgres and Valkey                     |
+| Read the installed library, not memory: major versions move things                                               | Semantic versioning; peer dependencies  | BullMQ 6 made `ioredis` an optional peer; custom job ids can't contain `:` |
+| Isolate integration tests by **namespace**, not by flushing a shared store                                       | Test isolation                          | A random BullMQ `prefix` per test                                          |
+
+### Companies House, seen through the queue
+
+- **273,376 active companies** match SIC 62011/62012/62020 (2026-10-15), about twice the earlier
+  estimate for two codes. A full ingest is roughly 55 pages of 5,000; `maxPages` keeps runs small.
+- **A 500-item page took about 0.6 s**, well inside the 10 s client timeout.
+- **`rateLimitRemain` fell by one per page**, from 600, as expected.
+
+## Part 3: the queue as built
+
+### Shape
+
+```
+pnpm --filter @gtm/worker ingest          apps/worker (pnpm dev)
+        │                                        │
+  cli.ts: parse flags                     index.ts: config, connections, client, db
+        │                                        │
+  enqueueIngestPage(page 0) ──► Valkey ◄── createIngestWorker (concurrency 1)
+                                  ▲              │
+                                  │       createIngestJobHandler
+                                  │         validate data → child logger (runId, jobId, attempt)
+                                  │              │
+                                  │       processIngestPage
+                                  │         search → map → upsert → next page?
+                                  └──────── enqueueIngestPage(next page)
+                                                 │ on error
+                                          handleIngestFailure
+                                            unrecoverable / pause queue / rethrow
+```
+
+| File           | Role                                                                           |
+| -------------- | ------------------------------------------------------------------------------ |
+| `job.ts`       | Queue name, data schema, `ingestJobId`, `defaultRunId`, retry options          |
+| `map.ts`       | Search item to `companies` row                                                 |
+| `enqueue.ts`   | `createIngestQueue`, `enqueueIngestPage` (validate, then add under the job id) |
+| `processor.ts` | One page: search, upsert, enqueue the next (hand-written)                      |
+| `failure.ts`   | Error to BullMQ instruction (hand-written)                                     |
+| `worker.ts`    | Job handler and BullMQ `Worker` wiring, event logs                             |
+| `cli.ts`       | Start a run                                                                    |
+| `../index.ts`  | Worker process: startup from validated config, graceful shutdown               |
+
+### Settings
+
+| Setting             | Value                                           | Why                                                            |
+| ------------------- | ----------------------------------------------- | -------------------------------------------------------------- |
+| Page size           | 500 (CLI `--size`, max 5,000)                   | Small enough to see the chain work; 5,000 is the API maximum   |
+| `maxPages`          | 2 (CLI `--max-pages`)                           | 1,000 companies meets the milestone without pulling 273,000    |
+| Run id              | UTC date (CLI `--run-id`)                       | One run per day dedupes; a new id forces a fresh run           |
+| Attempts            | 5, exponential from 5 s, 50% jitter             | Rides out a short outage; jitter spreads retries               |
+| Completed jobs kept | 7 days or 1,000 jobs                            | The job id dedupes only while the finished job is still stored |
+| Failed jobs kept    | Always                                          | Someone should look; a dead-letter queue comes in #20          |
+| Concurrency         | 1                                               | No shared rate limiter until #10                               |
+| 429 pause           | until `retryAt`, at least 1 s; 5 min if unknown | The limit belongs to the key, so the whole queue waits         |
+
+### Failure modes and how each is handled
+
+| Failure                                                | Handling                                                                                 | Test                                  |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------- | ------------------------------------- |
+| Companies House timeout, network error or 5xx          | Rethrown; BullMQ retries up to 5 times with backoff, then the job stays in `failed`      | `failure.test.ts`                     |
+| Bad key (401/403), wrong-shape response, other 4xx     | `UnrecoverableError`: fails after one attempt                                            | `failure.test.ts`; integration (401)  |
+| Rate limited (429)                                     | Queue paused until `retryAt`; job back to waiting; no attempt used                       | `failure.test.ts`; integration (429)  |
+| Postgres down during the upsert                        | Rethrown and retried; the next page is not enqueued                                      | `processor.test.ts`, `worker.test.ts` |
+| Valkey down while enqueueing the next page             | Job fails and retries; its rows are already written and the upsert absorbs the repeat    | `processor.test.ts`                   |
+| Valkey connection drops under the worker               | `ioredis` reconnects; worker commands wait (`maxRetriesPerRequest: null`); errors logged | Untested                              |
+| Same page enqueued twice (retry after enqueue, re-run) | Same job id; BullMQ ignores the second add while the first is stored                     | `enqueue.test.ts`; integration        |
+| Same companies seen again (new run, shifted page)      | Upsert on `company_number`; no duplicate rows                                            | Integration; `companies.int.test.ts`  |
+| Invalid job data in Valkey                             | `UnrecoverableError` before any API call                                                 | `worker.test.ts`                      |
+| Invalid CLI options                                    | zod error before anything is enqueued; exit code 1                                       | Manual                                |
+| Malformed incorporation date                           | Stored as null, so one bad row can't fail a page                                         | `map.test.ts`                         |
+| Ctrl-C or SIGTERM                                      | `worker.close()` lets the active job finish; a second signal forces the exit             | Manual (smoke run)                    |
+| Worker killed mid-job (crash, `kill -9`)               | The job's lock expires; BullMQ marks it stalled and runs it again; both steps idempotent | Untested                              |
+| Table emptied, then the same run id re-run             | Nothing runs: dedupe lives in Valkey. Use a new `--run-id`                               | Observed in the live run              |
+
+### Known gaps
+
+- **Companies House request logs don't carry `runId` or `jobId`.** The client is built once at
+  startup. Fix with a per-job client or `AsyncLocalStorage`; planned for #43.
+- **No shared rate limiter or cache yet.** Concurrency 1 plus the 429 handling stand in until #10
+  and #11; both will wrap the client's injected `fetch`.
+- **`upsertCompanies` writes null to `ch_etag` and `ceased_on`,** because search items don't carry
+  them. Harmless today; it will erase profile data once enrichment (weeks 3–4) writes those columns.
+- **A `start_index` cap (about 10,000?) is unverified.** Today's runs stop at 1,000. Check it on the
+  live API before raising `maxPages`; slicing by `incorporatedFrom` would get past it.
+- **Crash-and-resume is untested.** Killing the worker mid-job relies on BullMQ's stalled-job check.
+
+## Part 4: what to revise
+
+### The five ideas that matter most
+
+1. **At-least-once delivery means every job runs again some day.** Order the steps so a repeat
+   only redoes work (upsert, then enqueue), and make each step idempotent. _Revise:_ the crash table
+   in Part 1, and `processor.ts`.
+2. **Two layers of idempotency.** The job id prevents duplicate jobs; the upsert absorbs duplicate
+   work. Know which one protects you in each row of the failure table.
+3. **The error is the instruction.** `UnrecoverableError`, `RateLimitError` and a plain rethrow
+   mean three different things to BullMQ. _Revise:_ `failure.ts`, and the BullMQ "Retrying failing
+   jobs" and "Rate limiting" pages.
+4. **Paging follows the source, not the sink.** Stop conditions come from what Companies House
+   returned; `written` is a report, not an input.
+5. **Time again:** a moment vs a duration, `getTime()` vs `getMilliseconds()`, an injected clock.
+   This is the same lesson as `x-ratelimit-reset` in #8, one layer up.
+
+### Exercises (on a scratch branch)
+
+1. **Crash and resume.** Start a run with `--size 50 --max-pages 6`, then `kill -9` the worker in the
+   middle. Restart it. How long until the stalled job runs again, and does the row count end the
+   same? (This is the test the plan lists as untested.)
+2. **Force a 429.** Pass the worker a client whose `fetch` returns 429 with an `x-ratelimit-reset`
+   10 s ahead for the first call. Watch the pause in the logs, and confirm the job's attempt count.
+3. **Break dedupe on purpose.** Add `size` to the job id, enqueue the same run with two page sizes,
+   and explain the overlap you get in the rows (and the API calls you pay for).
+4. **Close the logging gap.** Sketch how `AsyncLocalStorage` would get `runId` into the Companies
+   House request log without passing a logger per job. What is the cost?
+5. **Explain the 429 path end to end, out loud:** header → `retryAtFrom` → `rateLimited` →
+   `handleIngestFailure` → `worker.rateLimit` → the job back in `wait`.
+
+### Read again (about 1 hour)
+
+- BullMQ docs: "Workers" (graceful shutdown, stalled jobs), "Retrying failing jobs", "Stop
+  retrying jobs", "Rate limiting" (manual rate limit), "Job ids".
+- MDN: `Date.prototype.getTime`, and "Date" (the getter list, to see why `getMilliseconds` exists).
+- Node.js docs: "Events: Error events"; `process` signal events.
+- Martin Kleppmann, _Designing Data-Intensive Applications_, ch. 11 (stream processing): the
+  sections on idempotence and exactly-once semantics.
+
 ## Self-check (answer out loud)
 
 1. Why does the upsert come before the enqueue?
@@ -407,7 +563,7 @@ Then put two bugs back and predict the failures: move the `retryable` check abov
    duplicate rows? Those are two different mechanisms; name both.
 6. Why does `written` come from the upsert and not from the page?
 7. Why does the processor take `enqueueNext` as a function instead of a BullMQ queue?
-8. What does `maxPages` protect you from, given about 130,000 matching companies?
+8. What does `maxPages` protect you from, given about 273,000 matching companies?
 9. Is `enqueueNext` recursion? What is the difference, and what does it buy you when a worker dies?
 10. Why must the `rate_limited` check come before the `retryable` check?
 11. Why does a 429 pause the whole queue rather than only delaying the one job?
