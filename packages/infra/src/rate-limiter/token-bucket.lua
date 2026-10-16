@@ -1,0 +1,9 @@
+-- Token bucket, run atomically by Valkey (hand-written, #10 checkpoint 1).
+--
+-- KEYS[1]  the bucket's hash key; fields `tokens` and `updatedAt` (ms)
+-- ARGV[1]  capacity: the most tokens the bucket can hold
+-- ARGV[2]  refill rate, in tokens per second
+-- ARGV[3]  cost of this request, in tokens
+--
+-- Returns { allowed (1 or 0), retryAfterMs (integer, 0 when allowed), tostring(tokensLeft) }
+-- Directions: docs/learningPath/issue-10-rate-limiter.md, Part 1b.
