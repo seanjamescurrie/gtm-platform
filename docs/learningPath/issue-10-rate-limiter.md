@@ -11,7 +11,7 @@ happens to a request when there's no token.
 ## Progress
 
 - [x] Checkpoint 0: acceptance criteria on the issue; this doc
-- [ ] Checkpoint 1: Lua script and `createTokenBucket` (hand-written)
+- [x] Checkpoint 1: Lua script and `createTokenBucket` (hand-written, 34 tests)
 - [ ] Checkpoint 2: `rateLimitedFetch` and `RateLimitExceededError` (hand-written)
 - [ ] Checkpoint 3: limiter errors in `handleIngestFailure` (hand-written)
 - [ ] Checkpoint 4: wiring into the worker; live run with two workers and two parallel runs

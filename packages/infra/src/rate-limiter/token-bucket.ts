@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs';
 import type { RedisConnection } from '../redis.js';
+import { z } from 'zod';
 
 export interface TokenBucketOptions {
   // The Valkey key holding this bucket. Every worker that shares a limit uses the same key.
@@ -22,6 +24,22 @@ export interface TokenBucket {
   take(cost?: number): Promise<TakeResult>;
 }
 
+const TOKEN_SCRIPT = readFileSync(new URL('./token-bucket.lua', import.meta.url), 'utf-8');
+
+const optionsSchema = z.object({
+  key: z.string().min(1),
+  capacity: z.number().int().min(1),
+  refillPerSecond: z.number().positive(),
+});
+
+// The script's reply is another system's answer, so check its shape before trusting it.
+// tokensLeft arrives as a string because Lua would cut a fraction to an integer on return.
+const responseSchema = z.tuple([
+  z.union([z.literal(0), z.literal(1)]),
+  z.number().int(),
+  z.string().refine((value) => Number.isFinite(Number(value)), 'must be a finite number'),
+]);
+
 /**
  * A token bucket whose state lives in Valkey, so every worker using the same key shares one budget.
  * Throws at once if the options are invalid.
@@ -30,8 +48,25 @@ export function createTokenBucket(
   connection: RedisConnection,
   options: TokenBucketOptions,
 ): TokenBucket {
-  // Hand-written (#10, checkpoint 1): make token-bucket.test.ts and token-bucket.int.test.ts pass.
-  void connection;
-  void options;
-  throw new Error('createTokenBucket is not implemented yet');
+  const valid = optionsSchema.parse(options);
+
+  const { key, capacity, refillPerSecond } = valid;
+
+  return {
+    key,
+    async take(cost = 1) {
+      if (cost <= 0 || !Number.isInteger(cost) || cost > capacity) {
+        throw new Error(`cost must be a whole number from 1 to ${capacity}, got ${cost}`);
+      }
+      const response = await connection.eval(TOKEN_SCRIPT, 1, key, capacity, refillPerSecond, cost);
+
+      const [allowed, retryAfterMs, tokensLeft] = responseSchema.parse(response);
+
+      return {
+        allowed: allowed === 1,
+        retryAfterMs,
+        tokensLeft: Number(tokensLeft),
+      };
+    },
+  };
 }
