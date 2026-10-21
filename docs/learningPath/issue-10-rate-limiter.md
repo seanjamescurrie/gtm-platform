@@ -245,19 +245,156 @@ Run the bucket tests with `pnpm exec vitest run --config vitest.int.config.ts pa
    with no extra work. Say out loud **why**; the answer is the reason the script exists.
 7. "the key expires": step 7.
 
-## Part 1c: checkpoint 2, `rateLimitedFetch` (outline)
+## Part 1c: checkpoint 2, `rateLimitedFetch`
 
-Full directions arrive with the checkpoint 2 tests. The shape:
+### What it is
 
-- `rateLimitedFetch(fetch, bucket, { maxWaitMs, sleep?, now? })` returns a function with the same
-  signature as `fetch`.
-- Work out a **deadline** once: now + `maxWaitMs`.
-- Loop: `take()`. If allowed, return `fetch(input, init)`. If not, and now + `retryAfterMs` is
-  past the deadline, throw `RateLimitExceededError` with `retryAt` = now + `retryAfterMs`.
-  Otherwise sleep for `retryAfterMs` and loop.
-- `sleep` and `now` are injected so the tests don't wait in real time.
-- **Trap:** the Companies House client starts its 10 s timeout **before** it calls `fetch`, so time
-  spent waiting for a token counts against it. Keep `maxWaitMs` well under the timeout.
+A function that takes a `fetch` and returns another `fetch`. The new one takes a token from the
+bucket before every request. It is a **decorator** (or wrapper): the caller can't tell it apart
+from the real `fetch`, so it plugs into `CompaniesHouseClient` through the `fetch` option from #8
+without changing the client.
+
+File: `packages/infra/src/rate-limiter/rate-limited-fetch.ts`. Tests:
+`rate-limited-fetch.test.ts`, 17 of them, no Valkey: the bucket, `fetch`, `sleep` and the clock
+are all fakes, and the fake clock only moves when your code calls `sleep`.
+
+### Read first (15 min)
+
+- The skeleton: `RateLimitExceededError`, `RateLimitedFetchOptions`, and the signature.
+- `rate-limited-fetch.test.ts`, top to `setup()`: how `take` is scripted with a list of results,
+  and how the fake `sleep` moves the fake clock.
+- `packages/integrations/src/companies-house/errors.ts`: the `CompaniesHouseError` constructor, for
+  the error-class pattern (`super(message)`, then `this.name`).
+- MDN: `AbortSignal.throwIfAborted()` and `AbortSignal.reason`.
+
+### What it must do
+
+| Situation                                                | What happens                                                      |
+| -------------------------------------------------------- | ----------------------------------------------------------------- |
+| The bucket has a token                                   | Call the real `fetch` with the same arguments; return its result  |
+| No token; waiting fits before the deadline               | `sleep(retryAfterMs)`, then ask the bucket again                  |
+| No token; waiting would end after the deadline           | Throw `RateLimitExceededError(key, now + retryAfterMs)`, no sleep |
+| The bucket throws (Valkey down)                          | Let the error out; never call `fetch` (fail closed)               |
+| The caller's `signal` has fired, before or during a wait | Reject with `signal.reason`; never call `fetch`                   |
+| `maxWaitMs` is negative or not a number                  | Throw when `rateLimitedFetch` is called, naming `maxWaitMs`       |
+
+### Directions: `RateLimitExceededError`
+
+1. In the constructor, pass `super()` a message that names the key and `retryAt` as an ISO string
+   (`retryAt.toISOString()`), e.g. `ratelimit:companies-house: no token until 2026-…Z`.
+2. Set `this.name = 'RateLimitExceededError'`, so logs and stack traces say what it is.
+3. Keep the two `readonly` fields as they are.
+
+### Directions: `rateLimitedFetch`, line by line
+
+**Once, when `rateLimitedFetch` is called:**
+
+1. Unpack `maxWaitMs`, `sleep` and `now` from the options, with defaults for the last two: a real
+   sleep (`new Promise((resolve) => setTimeout(resolve, ms))`) and `Date.now`.
+2. Check `maxWaitMs` is a finite number of 0 or more; otherwise throw an error that mentions
+   `maxWaitMs`. Like the bucket's options, a bad value is a programming error: stop at startup.
+
+**On every request**, in the `async (input, init) => { … }` function you return:
+
+3. Work out the **deadline once**: `now() + maxWaitMs`. Not inside the loop: every wait for this
+   request counts against the same budget.
+4. Loop (`for (;;)` or `while (true)`):
+   1. If the caller's signal has fired, stop: `init?.signal?.throwIfAborted()`.
+   2. `await bucket.take()`.
+   3. If allowed, `return fetch(input, init)`. Same arguments, untouched.
+   4. Otherwise, work out when the wait would end: `now() + retryAfterMs`. If that is **after**
+      the deadline (strictly greater; ending exactly on it is fine), throw
+      `new RateLimitExceededError(bucket.key, new Date(thatTime))`.
+   5. Otherwise `await sleep(retryAfterMs)` and go round again.
+
+**Why loop instead of sleeping once:** the bucket is shared. While this worker sleeps, another may
+take the token it was waiting for, so after the sleep it must ask again.
+
+Rules for the whole function:
+
+- **No `try`/`catch`.** A bucket error, an abort and a `fetch` error all travel out unchanged.
+- **Never call `Date.now()` or `setTimeout` directly** inside the request function; use `now` and
+  `sleep`, or the tests can't control time.
+- **Pass `input` and `init` through untouched.** The client's `Authorization` header and timeout
+  signal are in `init`.
+
+### Reference: the same shape for a different job
+
+A wrapper that retries a `503 Service Unavailable` within a time budget, using the server's
+`Retry-After` header. Same skeleton (options checked once, a deadline per request, a loop, an
+injected sleep and clock, the abort check), but it decides on the **response** rather than a
+token, and when the budget runs out it returns the last response instead of throwing.
+
+```ts
+export function retryOn503(
+  fetch: typeof globalThis.fetch,
+  {
+    maxWaitMs,
+    sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    now = Date.now,
+  }: { maxWaitMs: number; sleep?: (ms: number) => Promise<void>; now?: () => number },
+): typeof globalThis.fetch {
+  if (!Number.isFinite(maxWaitMs) || maxWaitMs < 0) {
+    throw new Error(`maxWaitMs must be 0 or more, got ${maxWaitMs}`);
+  }
+
+  return async (input, init) => {
+    const deadline = now() + maxWaitMs;
+    for (;;) {
+      init?.signal?.throwIfAborted();
+      const response = await fetch(input, init);
+      if (response.status !== 503) return response;
+
+      // Retry-After is a number of seconds here (it can also be a date; not handled).
+      const waitMs = Number(response.headers.get('retry-after') ?? '1') * 1_000;
+      if (now() + waitMs > deadline) return response; // out of budget: let the caller see the 503
+      await sleep(waitMs);
+    }
+  };
+}
+```
+
+| The 503 example                          | Your `rateLimitedFetch`                                         |
+| ---------------------------------------- | --------------------------------------------------------------- |
+| Calls `fetch` first, then decides        | Asks the bucket first; calls `fetch` only with a token          |
+| Wait comes from the `Retry-After` header | Wait comes from `retryAfterMs` in the bucket's result           |
+| Out of budget: returns the 503           | Out of budget: throws `RateLimitExceededError` with `retryAt`   |
+| No shared state                          | The bucket is shared, which is why it asks again after sleeping |
+
+### Suggested order
+
+```
+pnpm exec vitest packages/infra/src/rate-limiter/rate-limited-fetch.test.ts -t "part of the name"
+```
+
+1. The two `RateLimitExceededError` tests.
+2. "options" (the `maxWaitMs` check).
+3. "with a token" (3 tests): take, then fetch.
+4. "waiting for a token" (3 tests): the loop and `sleep`.
+5. "giving up" (3 tests): the deadline. Do the arithmetic for "counts every wait against one
+   deadline" on paper first.
+6. "failing closed": should pass already. Say why.
+7. "the caller's abort signal" (2 tests): one line, in the right place.
+8. "uses a real clock and a real sleep": the defaults.
+
+Then put two bugs back and predict the failures: work the deadline out inside the loop; and use
+`>=` instead of `>` against the deadline.
+
+### Traps
+
+- **The request timeout is already running.** The Companies House client creates its
+  `AbortSignal.timeout(10_000)` before it calls `fetch`, so the wait for a token eats into it. The
+  abort check stops a wait the caller has given up on, and `maxWaitMs` (5 s in the worker) keeps
+  the wait well inside the timeout.
+- **`retryAt` is a moment, not a duration** (#8, #9 again): `new Date(now() + retryAfterMs)`, not
+  `new Date(retryAfterMs)`, which is a date in January 1970.
+- **Don't consume `init`.** Reading or cloning it (e.g. a request body) would change what the real
+  `fetch` receives.
+
+### Finish
+
+- 17 tests pass; `pnpm format && pnpm lint && pnpm typecheck` are clean.
+- Commit as `add rate-limited fetch (#10)`, then ask Claude for review.
 
 ## Part 1d: checkpoint 3, the failure handler (outline)
 
