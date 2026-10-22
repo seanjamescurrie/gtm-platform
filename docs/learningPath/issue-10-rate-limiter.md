@@ -13,7 +13,7 @@ happens to a request when there's no token.
 - [x] Checkpoint 0: acceptance criteria on the issue; this doc
 - [x] Checkpoint 1: Lua script and `createTokenBucket` (hand-written, 34 tests)
 - [x] Checkpoint 2: `rateLimitedFetch` and `RateLimitExceededError` (hand-written, 17 tests)
-- [ ] Checkpoint 3: limiter errors in `handleIngestFailure` (hand-written)
+- [x] Checkpoint 3: limiter errors in `handleIngestFailure` (hand-written, 6 tests)
 - [ ] Checkpoint 4: wiring into the worker; live run with two workers and two parallel runs
 - [ ] Checkpoint 5: lessons, the limiter as built, PR
 
