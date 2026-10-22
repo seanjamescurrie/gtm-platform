@@ -396,12 +396,86 @@ Then put two bugs back and predict the failures: work the deadline out inside th
 - 17 tests pass; `pnpm format && pnpm lint && pnpm typecheck` are clean.
 - Commit as `add rate-limited fetch (#10)`, then ask Claude for review.
 
-## Part 1d: checkpoint 3, the failure handler (outline)
+## Part 1d: checkpoint 3, the failure handler
 
-The client wraps anything `fetch` throws as a `network` `CompaniesHouseError`, with the original as
-`cause` (#8). So a `RateLimitExceededError` reaches `handleIngestFailure` one level down. The new
-rule: walk the `cause` chain; if it contains a `RateLimitExceededError`, pause the queue until its
-`retryAt` and hand the job back, exactly as for a 429. It's the most specific case, so it goes first.
+### What it is
+
+When `rateLimitedFetch` gives up, it throws `RateLimitExceededError`. But that error never reaches
+`handleIngestFailure` as itself: the Companies House client catches anything `fetch` throws and
+wraps it as a `network` error, with the original as `cause` (#8). Today the handler sees "network
+error, retryable" and retries with backoff, which hits the same empty bucket again. The new rule:
+look down the `cause` chain, and if a `RateLimitExceededError` is there, treat it like a 429.
+
+File: `apps/worker/src/ingest/failure.ts`. Tests: six new ones in `failure.test.ts`, under "our
+own rate limiter gave up". Five fail now; "still retries an ordinary network error" passes already
+and must stay passing, so the rule can't catch every network error.
+
+### How the error arrives
+
+```
+CompaniesHouseError  kind: 'network', retryable: true
+  └─ cause: RateLimitExceededError  key: 'ratelimit:companies-house', retryAt: 12:00:06
+```
+
+The last test builds this for real: a real `CompaniesHouseClient` whose `fetch` is a
+`rateLimitedFetch` over a bucket that always refuses. If the client ever changes how it wraps
+errors, that test is the one that notices.
+
+### Reference: walking a cause chain, for a different error
+
+Finding a Postgres deadlock (error code `40P01`) anywhere in a chain, for example under a
+Drizzle error. Same walk, different test at each step:
+
+```ts
+function hasDeadlock(error: unknown): boolean {
+  let current: unknown = error;
+  // A depth cap, because nothing stops a chain from pointing back at itself.
+  for (let depth = 0; depth < 10 && current instanceof Error; depth++) {
+    if ('code' in current && current.code === '40P01') return true;
+    current = current.cause;
+  }
+  return false;
+}
+```
+
+- `current` is `unknown` because a `cause` can be anything, not only an `Error`.
+- `current instanceof Error` in the loop condition both stops at the end of the chain and narrows
+  the type, so `.cause` is allowed.
+
+### Directions
+
+1. **Import** `RateLimitExceededError` from `@gtm/infra`.
+2. **Write a small helper** that walks the chain and returns the `RateLimitExceededError` it finds,
+   or `undefined`. Return the error itself, not `true`: you need its `retryAt`. Cap the depth, as
+   in the reference.
+3. **Call it first** in `handleIngestFailure`, before the `instanceof CompaniesHouseError` check.
+   It's the most specific case, and when thrown directly it isn't a `CompaniesHouseError` at all.
+4. **If found:** pause exactly as for a 429. The pause is `retryAt` minus now, at least
+   `MIN_RATE_LIMIT_PAUSE_MS`; log one `warn` line; `await deps.pauseQueue(...)`; throw
+   `Worker.RateLimitError()`. `retryAt` is always set here, so there's no unknown-reset case.
+5. **Everything below stays as it is.**
+
+**Worth doing:** the 429 branch and the new branch now share "work out the pause, log, pause,
+throw". Move that into one helper that takes a `retryAt` (and a log message), so the two can't
+drift apart. Your call; say why either way.
+
+### Suggested order
+
+1. "when thrown directly": steps 1, 3 and 4, without the chain walk.
+2. "the cause of a network error": add the walk, one level.
+3. "further down the cause chain": the walk handles any depth without changes, if you wrote it as
+   a loop.
+4. "the minimum": should pass if you reused the 429 arithmetic.
+5. "still retries an ordinary network error": still passing? Then your rule only matches the
+   limiter's error.
+6. The end-to-end test.
+
+Then put a bug back: check `instanceof CompaniesHouseError` first. Which tests fail, and why?
+
+### Finish
+
+- All 21 tests in `failure.test.ts` pass; `pnpm format && pnpm lint && pnpm typecheck` are clean.
+- Commit as `pause the queue when the rate limiter gives up (#10)`, then ask Claude for review.
 
 ## Self-check (answer out loud)
 
@@ -415,3 +489,5 @@ rule: walk the `cause` chain; if it contains a `RateLimitExceededError`, pause t
 8. What happens to a request that waits 4 s for a token, given the client's 10 s timeout?
 9. How does a `RateLimitExceededError` thrown inside `fetch` reach the failure handler?
 10. Name two other rate-limiting algorithms and the trade-off each makes.
+11. Why does the limiter's error reach the handler as a `network` error, and what would happen if
+    the handler didn't look at the cause?
