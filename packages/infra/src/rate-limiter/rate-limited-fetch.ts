@@ -9,9 +9,8 @@ export class RateLimitExceededError extends Error {
   readonly retryAt: Date;
 
   constructor(key: string, retryAt: Date) {
-    // Hand-written (#10, checkpoint 2): give it a message naming the key and retryAt, and a `name`
-    // (see CompaniesHouseError in @gtm/integrations for the pattern).
-    super('RateLimitExceededError is not implemented yet');
+    super(`Rate limit exceeded for key ${key}, retry at ${retryAt.toISOString()}`);
+    this.name = 'RateLimitExceededError';
     this.key = key;
     this.retryAt = retryAt;
   }
@@ -37,9 +36,29 @@ export function rateLimitedFetch(
   bucket: Pick<TokenBucket, 'key' | 'take'>,
   options: RateLimitedFetchOptions,
 ): typeof globalThis.fetch {
-  // Hand-written (#10, checkpoint 2): make rate-limited-fetch.test.ts pass.
-  void fetch;
-  void bucket;
-  void options;
-  return () => Promise.reject(new Error('rateLimitedFetch is not implemented yet'));
+  const {
+    maxWaitMs,
+    sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
+    now = Date.now,
+  } = options;
+  if (maxWaitMs < 0 || !Number.isFinite(maxWaitMs)) {
+    throw new Error(`maxWaitMs must be 0 or more, got ${maxWaitMs}`);
+  }
+
+  return async (input, init) => {
+    const deadline = now() + maxWaitMs;
+    for (;;) {
+      init?.signal?.throwIfAborted();
+      const result = await bucket.take();
+      const nowMs = now();
+      if (result.allowed) {
+        return fetch(input, init);
+      }
+      const waitEndsAt = result.retryAfterMs + nowMs;
+      if (waitEndsAt > deadline) {
+        throw new RateLimitExceededError(bucket.key, new Date(waitEndsAt));
+      }
+      await sleep(result.retryAfterMs);
+    }
+  };
 }
