@@ -89,7 +89,8 @@ export function createIngestWorker({
     {
       connection,
       ...(prefix ? { prefix } : {}),
-      // One request at a time until the shared rate limiter (#10) exists.
+      // One page at a time per worker. The shared token bucket (#10) keeps all workers together
+      // under the Companies House limit, so more workers or more concurrency stay safe.
       concurrency: 1,
     },
   );

@@ -1,4 +1,5 @@
-import { CompaniesHouseError } from '@gtm/integrations';
+import { RateLimitExceededError, rateLimitedFetch } from '@gtm/infra';
+import { CompaniesHouseClient, CompaniesHouseError } from '@gtm/integrations';
 import { RateLimitError, UnrecoverableError } from 'bullmq';
 import { pino } from 'pino';
 import { describe, expect, it, vi } from 'vitest';
@@ -107,6 +108,93 @@ describe('handleIngestFailure', () => {
       const error = CompaniesHouseError.rateLimited(WHERE, secondsFromNow(90));
 
       await expect(handleIngestFailure(error, deps)).rejects.toBe(valkeyDown);
+    });
+  });
+
+  describe('our own rate limiter gave up (RateLimitExceededError)', () => {
+    const KEY = 'ratelimit:companies-house';
+
+    it('pauses the queue until retryAt and hands the job back, when thrown directly', async () => {
+      const { deps, pauseQueue } = setup();
+      const error = new RateLimitExceededError(KEY, secondsFromNow(6));
+
+      const thrown = await handleIngestFailure(error, deps).catch((e: unknown) => e);
+
+      expect(pauseQueue).toHaveBeenCalledExactlyOnceWith(6_000);
+      expect(thrown).toBeInstanceOf(RateLimitError);
+    });
+
+    it('does the same when it is the cause of a network error, which is how the client delivers it', async () => {
+      const { deps, pauseQueue } = setup();
+      const limiterError = new RateLimitExceededError(KEY, secondsFromNow(6));
+      const error = CompaniesHouseError.network(WHERE, limiterError);
+
+      const thrown = await handleIngestFailure(error, deps).catch((e: unknown) => e);
+
+      expect(pauseQueue).toHaveBeenCalledExactlyOnceWith(6_000);
+      expect(thrown).toBeInstanceOf(RateLimitError);
+    });
+
+    it('finds it further down the cause chain', async () => {
+      const { deps, pauseQueue } = setup();
+      const limiterError = new RateLimitExceededError(KEY, secondsFromNow(6));
+      const error = new Error('outer', { cause: CompaniesHouseError.network(WHERE, limiterError) });
+
+      const thrown = await handleIngestFailure(error, deps).catch((e: unknown) => e);
+
+      expect(pauseQueue).toHaveBeenCalledExactlyOnceWith(6_000);
+      expect(thrown).toBeInstanceOf(RateLimitError);
+    });
+
+    it('pauses for the minimum when its retryAt has already passed', async () => {
+      const { deps, pauseQueue } = setup();
+      const error = CompaniesHouseError.network(
+        WHERE,
+        new RateLimitExceededError(KEY, secondsFromNow(-5)),
+      );
+
+      await handleIngestFailure(error, deps).catch(() => undefined);
+
+      expect(pauseQueue).toHaveBeenCalledExactlyOnceWith(MIN_RATE_LIMIT_PAUSE_MS);
+    });
+
+    it('still retries an ordinary network error with backoff', async () => {
+      const { deps, pauseQueue } = setup();
+      const error = CompaniesHouseError.network(WHERE, new TypeError('fetch failed'));
+
+      await expect(handleIngestFailure(error, deps)).rejects.toBe(error);
+      expect(pauseQueue).not.toHaveBeenCalled();
+    });
+
+    it('end to end: a real client whose rate-limited fetch gives up produces an error that pauses the queue', async () => {
+      // No Valkey: a bucket that always refuses with a 6 s wait, and a 5 s budget, so the wrapper
+      // gives up at once. The real client then wraps that error, exactly as it would in production.
+      const take = vi
+        .fn()
+        .mockResolvedValue({ allowed: false, retryAfterMs: 6_000, tokensLeft: 0 });
+      const realFetch = vi.fn<typeof globalThis.fetch>();
+      const client = new CompaniesHouseClient({
+        apiKey: '00000000-0000-4000-8000-000000000000',
+        logger: pino({ level: 'silent' }),
+        fetch: rateLimitedFetch(
+          realFetch,
+          { key: KEY, take },
+          {
+            maxWaitMs: 5_000,
+            now: () => NOW.getTime(),
+          },
+        ),
+      });
+      const clientError = await client
+        .advancedSearch({ sicCodes: ['62012'] })
+        .catch((e: unknown) => e);
+      const { deps, pauseQueue } = setup();
+
+      const thrown = await handleIngestFailure(clientError, deps).catch((e: unknown) => e);
+
+      expect(realFetch).not.toHaveBeenCalled();
+      expect(pauseQueue).toHaveBeenCalledExactlyOnceWith(6_000);
+      expect(thrown).toBeInstanceOf(RateLimitError);
     });
   });
 

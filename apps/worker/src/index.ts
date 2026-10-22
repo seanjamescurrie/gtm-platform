@@ -1,9 +1,19 @@
 import { getCompaniesHouseApiKey, getDatabaseUrl, getRedisUrl } from '@gtm/config';
 import { createDb, type DbHandle } from '@gtm/db';
-import { createRedisConnection, type RedisConnection } from '@gtm/infra';
+import {
+  createRedisConnection,
+  createTokenBucket,
+  rateLimitedFetch,
+  type RedisConnection,
+} from '@gtm/infra';
 import { CompaniesHouseClient } from '@gtm/integrations';
 import { pino } from 'pino';
 import { createIngestQueue, type IngestQueue } from './ingest/enqueue.js';
+import {
+  COMPANIES_HOUSE_MAX_WAIT_MS,
+  COMPANIES_HOUSE_RATE_LIMIT,
+  loggingBucket,
+} from './ingest/rate-limit.js';
 import { createIngestWorker, type IngestWorker } from './ingest/worker.js';
 
 const log = pino({ name: 'worker', level: process.env.LOG_LEVEL ?? 'info' });
@@ -11,6 +21,7 @@ const log = pino({ name: 'worker', level: process.env.LOG_LEVEL ?? 'info' });
 let db: DbHandle | undefined;
 let queueConnection: RedisConnection | undefined;
 let workerConnection: RedisConnection | undefined;
+let limiterConnection: RedisConnection | undefined;
 let queue: IngestQueue | undefined;
 let worker: IngestWorker | undefined;
 
@@ -21,7 +32,11 @@ async function closeAll(): Promise<void> {
   await queue?.close();
   await db?.close();
   // BullMQ may already have closed these; quitting a closed connection is not an error worth reporting.
-  await Promise.allSettled([queueConnection?.quit(), workerConnection?.quit()]);
+  await Promise.allSettled([
+    queueConnection?.quit(),
+    workerConnection?.quit(),
+    limiterConnection?.quit(),
+  ]);
 }
 
 let shuttingDown = false;
@@ -54,9 +69,19 @@ try {
     logger: log.child({ component: 'redis' }),
   });
   queue = createIngestQueue(queueConnection);
+  // Producer-style connection: if Valkey is down, a take fails after a few retries (fail closed).
+  limiterConnection = createRedisConnection(redisUrl, {
+    logger: log.child({ component: 'redis' }),
+  });
+  const bucket = loggingBucket(
+    createTokenBucket(limiterConnection, COMPANIES_HOUSE_RATE_LIMIT),
+    log.child({ component: 'rate-limiter' }),
+  );
   const client = new CompaniesHouseClient({
     apiKey: getCompaniesHouseApiKey(),
     logger: log.child({ component: 'companies-house' }),
+    // Every request takes a token from the bucket all workers share (#10).
+    fetch: rateLimitedFetch(globalThis.fetch, bucket, { maxWaitMs: COMPANIES_HOUSE_MAX_WAIT_MS }),
   });
   worker = createIngestWorker({
     connection: workerConnection,
