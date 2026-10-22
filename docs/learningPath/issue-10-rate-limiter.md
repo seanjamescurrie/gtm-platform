@@ -2,8 +2,8 @@
 
 Companion to issue #10 (hand-written). Part 1 is the plan and the directions for the parts you
 write: the Lua script and `createTokenBucket` (checkpoint 1), `rateLimitedFetch` (checkpoint 2)
-and the failure-handler change (checkpoint 3). Parts 2–4 (lessons, the limiter as built, what to
-revise) are filled in at checkpoint 5.
+and the failure-handler change (checkpoint 3). Part 2 records what each piece taught, Part 3
+describes the limiter as built with its failure modes, and Part 4 is what to revise.
 
 **Goal:** explain in 30 seconds why the limiter is a Lua script, whose clock it uses, and what
 happens to a request when there's no token.
@@ -15,7 +15,7 @@ happens to a request when there's no token.
 - [x] Checkpoint 2: `rateLimitedFetch` and `RateLimitExceededError` (hand-written, 17 tests)
 - [x] Checkpoint 3: limiter errors in `handleIngestFailure` (hand-written, 6 tests)
 - [x] Checkpoint 4: wiring; live run (2026-10-22): 3 workers, 2 parallel runs, 30 requests in 10.9 s, no 429
-- [ ] Checkpoint 5: lessons, the limiter as built, PR
+- [x] Checkpoint 5: lessons, the limiter as built, PR
 
 ## Part 1: the plan
 
@@ -476,6 +476,154 @@ Then put a bug back: check `instanceof CompaniesHouseError` first. Which tests f
 
 - All 21 tests in `failure.test.ts` pass; `pnpm format && pnpm lint && pnpm typecheck` are clean.
 - Commit as `pause the queue when the rate limiter gives up (#10)`, then ask Claude for review.
+
+## Part 2: lessons
+
+### The bucket (hand-written)
+
+| Lesson                                                                                               | Name to search                         | Where it bit us                                                                        |
+| ---------------------------------------------------------------------------------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------- |
+| Each client library has its own call shape; read the one you're using                                | ioredis `eval` vs node-redis `eval`    | `{ keys, arguments }` (node-redis) sent `[object Object]` as the key; `ARGV` was empty |
+| Read the **first** type error: it often names the real problem                                       | TS2769 "No overload matches this call" | It pointed at the `eval` call before any test ran                                      |
+| A schema describes the **wire format**, not the type you want; convert afterwards                    | Boundary validation                    | Changing the third reply field to `z.number()` refused every real reply                |
+| Lua cuts fractions to integers on return; send them as strings                                       | Lua → RESP conversion                  | Why `tokensLeft` is `tostring(tokens)` and a string in the schema                      |
+| A missing hash field is `false` in Lua, and `tonumber(false)` is `nil`, so `or` can supply a default | Lua truthiness                         | `tonumber(stored[1]) or capacity`: your compact version                                |
+| Not writing on a refusal is still correct, if the stored pair stays "tokens as of `updatedAt`"       | Invariants                             | Your design; it saves a write when the limiter is busiest                              |
+| Fakes can't catch a wrong call to the real system; that's what integration tests are for             | Test doubles; integration tests        | The fake connection ignored its arguments, so the unit tests passed                    |
+| Regexes in tests are case-sensitive                                                                  | —                                      | `/cost/` didn't match `Cost must…`                                                     |
+
+### The fetch wrapper and the failure handler (hand-written)
+
+| Lesson                                                                                          | Name to search                     | Where it bit us                                                                                            |
+| ----------------------------------------------------------------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| A check after `Math.min` against the same bound can never be true                               | Dead code; tautological conditions | The give-up check never fired, so the wrapper slept instead of handing back                                |
+| Zero is often a valid setting; check the boundary the tests name                                | Boundary values                    | `maxWaitMs <= 0` refused "never wait"                                                                      |
+| A moment is not a duration, **again**                                                           | Timestamps vs durations            | `pause = retryAt.getTime()`: a 56-year pause (after `x-ratelimit-reset` in #8 and `getMilliseconds` in #9) |
+| Name values by kind: `waitEndsAt`, `retryAt` (moments); `pauseMs`, `retryAfterMs` (durations)   | Naming                             | `waitTime` held a moment, and read like a length of time                                                   |
+| Duplicated logic drifts; one helper makes the drift impossible                                  | DRY; single source of truth        | The limiter's copy of the pause arithmetic went wrong while the 429 copy stayed right                      |
+| pino takes fields in the **first** argument; anything after the message fills `%s` placeholders | pino log method signature          | `{ key }` as the third argument was silently dropped                                                       |
+| Errors arrive wrapped; look down the `cause` chain, with a depth cap                            | Error chaining; `Error.cause`      | The client delivers the limiter's error as a retryable `network` error                                     |
+| Copied log messages lie                                                                         | —                                  | "rate limited by companies house" on a pause our own limiter caused                                        |
+
+### Design
+
+| Lesson                                                                                           | Name to search                             |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------ |
+| A shared counter needs read-modify-write as **one** step; a Lua script is that step in Valkey    | Atomicity; race conditions; check-then-act |
+| One clock for all workers (Valkey's `TIME`) is what makes a limit shared                         | Clock skew                                 |
+| A missing key and a full bucket mean the same thing, so the key can expire once it would be full | Self-cleaning state; TTL                   |
+| Fail closed when the thing doing the counting is down                                            | Fail-open vs fail-closed                   |
+| Wrap `fetch` instead of changing the client; wrap the bucket to add logging                      | Decorator pattern                          |
+| Wait briefly in place; beyond a budget, hand the work back to the queue                          | Backpressure                               |
+| A wait inside a request counts against that request's timeout                                    | Timeout budgets                            |
+
+## Part 3: the limiter as built
+
+### Shape
+
+```
+CompaniesHouseClient
+  └─ fetch = rateLimitedFetch(globalThis.fetch, bucket, { maxWaitMs: 5_000 })
+                │
+                └─ bucket = loggingBucket(createTokenBucket(connection, COMPANIES_HOUSE_RATE_LIMIT))
+                              │
+                              └─ EVAL token-bucket.lua 1 ratelimit:companies-house 10 1.8 1
+                                   TIME → refill → take or wait → HSET + PEXPIRE
+
+On give-up: RateLimitExceededError → wrapped by the client as `network` (cause)
+          → handleIngestFailure finds it in the cause chain → worker.rateLimit(pause) → job back to wait
+```
+
+| File                                                    | Role                                                                           |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `packages/infra/src/rate-limiter/token-bucket.lua`      | The atomic check (hand-written)                                                |
+| `packages/infra/src/rate-limiter/token-bucket.ts`       | Options and cost checks, `eval`, reply validation (hand-written)               |
+| `packages/infra/src/rate-limiter/rate-limited-fetch.ts` | Wait or hand back; `RateLimitExceededError` (hand-written)                     |
+| `apps/worker/src/ingest/failure.ts`                     | Limiter errors and 429s pause the queue (hand-written, plus the shared helper) |
+| `apps/worker/src/ingest/rate-limit.ts`                  | The Companies House policy, and `loggingBucket`                                |
+| `apps/worker/src/index.ts`                              | Wiring                                                                         |
+
+### Settings
+
+| Setting    | Value                       | Why                                                                |
+| ---------- | --------------------------- | ------------------------------------------------------------------ |
+| Key        | `ratelimit:companies-house` | One budget per API key, shared by every worker                     |
+| Refill     | 1.8 tokens per second       | 90% of 600 per 5 minutes; headroom for manual calls                |
+| Capacity   | 10                          | A small burst after an idle spell; 10 + 1.8 × 300 = 550 < 600      |
+| Max wait   | 5 s                         | Well inside the client's 10 s request timeout                      |
+| Expiry     | Time until full again       | An idle bucket removes itself                                      |
+| Connection | Its own, producer-style     | Fails after a few retries when Valkey is down, rather than hanging |
+
+### The live run (2026-10-22)
+
+Three workers (two started for the test, plus `pnpm dev`) and two runs at once (SIC 62011 and
+62012, 20 per page, 15 pages each): **30 requests in 10.9 s**, which is the 10-token burst plus
+1.8 per second × 10.9 s ≈ 29.6. No 429s, no failed jobs. Each logged wait was about 460–480 ms,
+as expected between tokens at 1.8 per second. No wait reached 5 s, so no queue pause happened.
+
+### Failure modes and how each is handled
+
+| Failure                                                              | Handling                                                                                       | Test                                             |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| Several workers (or runs) want tokens at once                        | One atomic script; exactly `capacity` succeed, the rest are told how long to wait              | Integration: "50 takes at once…"                 |
+| Workers on different machines with different clocks                  | The script reads Valkey's clock, not the caller's                                              | By design                                        |
+| Clock steps back (failover to a replica)                             | Elapsed time is clamped at 0, so no tokens are removed                                         | Untested                                         |
+| Short wait for a token                                               | The request sleeps and asks again (another worker may have taken it)                           | Unit: "waiting for a token"                      |
+| Long wait (more than 5 s)                                            | `RateLimitExceededError` → queue paused until `retryAt` → job back to waiting, no attempt used | Unit, including end to end through a real client |
+| The caller's request timeout fires while waiting                     | The wait stops and rejects with the timeout reason; the client reports a `timeout`             | Unit: "the caller's abort signal"                |
+| Valkey down                                                          | `take` rejects (fail closed); the job retries with backoff                                     | Unit: "fails closed"                             |
+| Malformed reply from the script                                      | zod rejects it; the job retries                                                                | Unit: "rejects a reply where…"                   |
+| Bad options or cost (a programming error)                            | Thrown at startup or on the call, with the field named                                         | Unit                                             |
+| Idle bucket                                                          | Its key expires once it would be full again                                                    | Integration: "expires the key…"                  |
+| Companies House still answers 429 (limit shared with something else) | The #9 handling: queue paused until `x-ratelimit-reset`                                        | #9 tests                                         |
+
+### Known gaps
+
+- **A queue pause hasn't happened in a live run.** The path is covered by unit tests, including
+  one through a real `CompaniesHouseClient`, but the live run never waited 5 s.
+- **The script is sent in full on every call** (`EVAL`). `EVALSHA` with a cached hash (ioredis's
+  `defineCommand`) would save bandwidth; not worth the complexity at 1.8 requests per second.
+- **One policy, hard-coded.** Other providers (weeks 3–4) will need their own buckets; a policy
+  table can come when there's a second one.
+- **Companies House request logs still lack `runId`/`jobId`** (from #9; planned for #43).
+
+## Part 4: what to revise
+
+### The five ideas that matter most
+
+1. **Atomicity.** Why "read, then write" from TypeScript breaks with two workers, and why a Lua
+   script doesn't. _Revise:_ `token-bucket.lua`; the "50 takes at once" test.
+2. **Whose clock.** One clock for every worker is what makes the limit shared. _Revise:_ the
+   `TIME` lines; Part 1's design notes.
+3. **The wire format is the boundary.** Lua's truncation decides the reply's shape; zod checks it
+   before TypeScript trusts it. _Revise:_ the reply schema and its comment.
+4. **Moments vs durations, for the last time.** `retryAt`, `waitEndsAt` vs `pauseMs`,
+   `retryAfterMs`. _Revise:_ `pauseQueueUntil` and `rateLimitedFetch`.
+5. **Decorators.** `rateLimitedFetch` and `loggingBucket` add behaviour without changing what they
+   wrap. _Revise:_ how the client gets its `fetch` in `index.ts`.
+
+### Exercises (on a scratch branch)
+
+1. **Break atomicity on purpose.** Write `take` in TypeScript as `HMGET`, compute, `HSET` (no
+   script), and run the "50 takes at once" test. How many are allowed? Why?
+2. **Force a queue pause live.** Set the refill to 0.1 per second, start a run, and watch for
+   "rate limiter out of tokens, pausing queue" and the job going back to waiting.
+3. **Swap the algorithm.** Rewrite the script as a fixed-window counter (the quota example in
+   Part 1b is close). What does a burst across a window boundary allow?
+4. **`EVALSHA`.** Use ioredis's `defineCommand` to cache the script. What happens after Valkey
+   restarts and forgets it?
+5. **Explain the give-up path end to end, out loud:** refused take → `waitEndsAt` past the
+   deadline → `RateLimitExceededError` → wrapped as `network` → `findRateLimitExceededError` →
+   `pauseQueueUntil` → `worker.rateLimit` → the job back in `wait`.
+
+### Read again (about 1 hour)
+
+- Valkey docs: "Scripting with Lua", `EVAL`, `EVALSHA`, `TIME`, `PEXPIRE`.
+- Stripe engineering blog: "Scaling your API with rate limiters" (token bucket in Redis, and when
+  to fail open).
+- Cloudflare blog: "How we built rate limiting capable of scaling to millions of domains"
+  (sliding window counters).
+- MDN: `Error.cause`, `AbortSignal.throwIfAborted()`.
 
 ## Self-check (answer out loud)
 
