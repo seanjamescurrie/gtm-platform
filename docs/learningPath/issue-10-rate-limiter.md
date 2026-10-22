@@ -14,7 +14,7 @@ happens to a request when there's no token.
 - [x] Checkpoint 1: Lua script and `createTokenBucket` (hand-written, 34 tests)
 - [x] Checkpoint 2: `rateLimitedFetch` and `RateLimitExceededError` (hand-written, 17 tests)
 - [x] Checkpoint 3: limiter errors in `handleIngestFailure` (hand-written, 6 tests)
-- [ ] Checkpoint 4: wiring into the worker; live run with two workers and two parallel runs
+- [x] Checkpoint 4: wiring; live run (2026-10-22): 3 workers, 2 parallel runs, 30 requests in 10.9 s, no 429
 - [ ] Checkpoint 5: lessons, the limiter as built, PR
 
 ## Part 1: the plan
