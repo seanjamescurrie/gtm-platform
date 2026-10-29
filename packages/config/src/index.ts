@@ -77,3 +77,27 @@ export function getRedisCacheUrl(env: NodeJS.ProcessEnv = process.env): string {
   }
   return result.data;
 }
+
+// Long enough that guessing it over HTTP basic auth isn't practical. Not a substitute for real auth.
+const QUEUE_DASHBOARD_PASSWORD_MIN_LENGTH = 12;
+const queueDashboardPassword = z.string().min(QUEUE_DASHBOARD_PASSWORD_MIN_LENGTH, {
+  error: `must be at least ${QUEUE_DASHBOARD_PASSWORD_MIN_LENGTH} characters`,
+});
+
+/**
+ * The password for the API's queue dashboard (#12). Unset or empty means the dashboard is off:
+ * not mounted, and the API doesn't connect to Valkey for it.
+ */
+export function getQueueDashboardPassword(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const raw = env.QUEUE_DASHBOARD_PASSWORD;
+  if (raw === undefined || raw === '') return undefined;
+
+  const result = queueDashboardPassword.safeParse(raw);
+  if (!result.success) {
+    // Never echo the value, or even its length: either would help someone guess it.
+    throw new Error(`QUEUE_DASHBOARD_PASSWORD ${result.error.issues[0]?.message ?? 'invalid'}`);
+  }
+  return result.data;
+}

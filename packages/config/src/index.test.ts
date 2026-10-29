@@ -3,6 +3,7 @@ import {
   getApiPort,
   getCompaniesHouseApiKey,
   getDatabaseUrl,
+  getQueueDashboardPassword,
   getRedisCacheUrl,
   getRedisUrl,
 } from './index.js';
@@ -128,6 +129,36 @@ describe('getRedisCacheUrl', () => {
     }
     expect(message).toMatch(/^REDIS_CACHE_URL /);
     expect(message).not.toContain('s3cret');
+  });
+});
+
+describe('getQueueDashboardPassword', () => {
+  it('is undefined when unset or empty: the dashboard stays off', () => {
+    expect(getQueueDashboardPassword({})).toBeUndefined();
+    expect(getQueueDashboardPassword({ QUEUE_DASHBOARD_PASSWORD: '' })).toBeUndefined();
+  });
+
+  it('returns a password of 12 characters or more', () => {
+    expect(getQueueDashboardPassword({ QUEUE_DASHBOARD_PASSWORD: 'twelve-chars' })).toBe(
+      'twelve-chars',
+    );
+  });
+
+  it('rejects a password shorter than 12 characters', () => {
+    expect(() => getQueueDashboardPassword({ QUEUE_DASHBOARD_PASSWORD: 'short-pass1' })).toThrow(
+      /^QUEUE_DASHBOARD_PASSWORD must be at least 12 characters$/,
+    );
+  });
+
+  it('never includes the value in the error', () => {
+    let message = '';
+    try {
+      getQueueDashboardPassword({ QUEUE_DASHBOARD_PASSWORD: 'hunter2' });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toMatch(/^QUEUE_DASHBOARD_PASSWORD /);
+    expect(message).not.toContain('hunter2');
   });
 });
 
