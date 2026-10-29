@@ -1,19 +1,21 @@
-import { getCompaniesHouseApiKey, getDatabaseUrl, getRedisUrl } from '@gtm/config';
+import {
+  getCompaniesHouseApiKey,
+  getDatabaseUrl,
+  getRedisCacheUrl,
+  getRedisUrl,
+} from '@gtm/config';
 import { createDb, type DbHandle } from '@gtm/db';
 import {
   createRedisConnection,
   createTokenBucket,
-  rateLimitedFetch,
+  redisCacheStore,
   type RedisConnection,
 } from '@gtm/infra';
 import { CompaniesHouseClient } from '@gtm/integrations';
 import { pino } from 'pino';
 import { createIngestQueue, type IngestQueue } from './ingest/enqueue.js';
-import {
-  COMPANIES_HOUSE_MAX_WAIT_MS,
-  COMPANIES_HOUSE_RATE_LIMIT,
-  loggingBucket,
-} from './ingest/rate-limit.js';
+import { companiesHouseFetch } from './ingest/http.js';
+import { COMPANIES_HOUSE_RATE_LIMIT, loggingBucket } from './ingest/rate-limit.js';
 import { createIngestWorker, type IngestWorker } from './ingest/worker.js';
 
 const log = pino({ name: 'worker', level: process.env.LOG_LEVEL ?? 'info' });
@@ -22,6 +24,7 @@ let db: DbHandle | undefined;
 let queueConnection: RedisConnection | undefined;
 let workerConnection: RedisConnection | undefined;
 let limiterConnection: RedisConnection | undefined;
+let cacheConnection: RedisConnection | undefined;
 let queue: IngestQueue | undefined;
 let worker: IngestWorker | undefined;
 
@@ -36,6 +39,7 @@ async function closeAll(): Promise<void> {
     queueConnection?.quit(),
     workerConnection?.quit(),
     limiterConnection?.quit(),
+    cacheConnection?.quit(),
   ]);
 }
 
@@ -69,6 +73,11 @@ try {
     logger: log.child({ component: 'redis' }),
   });
   queue = createIngestQueue(queueConnection);
+  // The cache may live elsewhere (REDIS_CACHE_URL); by default it shares Valkey with the queue.
+  // Producer-style, so a cache read fails after a few retries and the request goes ahead (fail open).
+  cacheConnection = createRedisConnection(getRedisCacheUrl(), {
+    logger: log.child({ component: 'redis' }),
+  });
   // Producer-style connection: if Valkey is down, a take fails after a few retries (fail closed).
   limiterConnection = createRedisConnection(redisUrl, {
     logger: log.child({ component: 'redis' }),
@@ -80,8 +89,13 @@ try {
   const client = new CompaniesHouseClient({
     apiKey: getCompaniesHouseApiKey(),
     logger: log.child({ component: 'companies-house' }),
-    // Every request takes a token from the bucket all workers share (#10).
-    fetch: rateLimitedFetch(globalThis.fetch, bucket, { maxWaitMs: COMPANIES_HOUSE_MAX_WAIT_MS }),
+    // Cache (#11) outside the shared rate limiter (#10): see companiesHouseFetch.
+    fetch: companiesHouseFetch({
+      fetch: globalThis.fetch,
+      bucket,
+      cache: redisCacheStore(cacheConnection),
+      log: log.child({ component: 'cache' }),
+    }),
   });
   worker = createIngestWorker({
     connection: workerConnection,

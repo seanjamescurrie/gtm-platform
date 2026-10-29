@@ -60,3 +60,20 @@ export function getRedisUrl(env: NodeJS.ProcessEnv = process.env): string {
   }
   return result.data;
 }
+
+/**
+ * Where the response cache (#11) lives. Defaults to REDIS_URL, so local dev needs nothing extra.
+ * In production it can point at a separate cluster that is allowed to evict old entries, which the
+ * BullMQ instance must never do (it runs with `noeviction`).
+ */
+export function getRedisCacheUrl(env: NodeJS.ProcessEnv = process.env): string {
+  // Empty counts as unset, like API_PORT: `REDIS_CACHE_URL=` in .env means "use the default".
+  if (env.REDIS_CACHE_URL === undefined || env.REDIS_CACHE_URL === '') return getRedisUrl(env);
+
+  const result = redisUrlSchema.safeParse(env.REDIS_CACHE_URL);
+  if (!result.success) {
+    // Never echo the value: it can contain a password.
+    throw new Error(`REDIS_CACHE_URL ${result.error.issues[0]?.message ?? 'invalid'}`);
+  }
+  return result.data;
+}

@@ -321,6 +321,24 @@ describe('CompaniesHouseClient: logging', () => {
     expect(line).not.toHaveProperty('rateLimitRemain');
   });
 
+  it('logs whether a response cache answered the request', async () => {
+    const { client, logs } = setup(() =>
+      jsonResponse(loadFixture('company-profile.json'), 200, { 'x-cache': 'hit' }),
+    );
+
+    await client.getCompanyProfile('NI642876');
+
+    expect(logs.lines.find((entry) => entry.status === 200)?.cache).toBe('hit');
+  });
+
+  it('logs no cache field when no cache wraps fetch', async () => {
+    const { client, logs } = setup(() => jsonResponse(loadFixture('company-profile.json')));
+
+    await client.getCompanyProfile('NI642876');
+
+    expect(logs.lines.find((entry) => entry.status === 200)).not.toHaveProperty('cache');
+  });
+
   it('logs rateLimitRemain: 0 when the header really says 0', async () => {
     const { client, logs } = setup(() =>
       jsonResponse(loadFixture('company-profile.json'), 200, { 'x-ratelimit-remain': '0' }),

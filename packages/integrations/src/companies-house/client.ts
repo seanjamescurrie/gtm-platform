@@ -82,6 +82,8 @@ export class CompaniesHouseClient {
         status: response.status,
         durationMs: Math.round(performance.now() - perf),
         rateLimitRemain: remain === null ? undefined : Number(remain),
+        // Set by the response cache (#11) when one wraps fetch: 'hit' means no request was made.
+        cache: response.headers.get('x-cache') ?? undefined,
       },
       'companies house request',
     );
