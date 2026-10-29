@@ -14,3 +14,4 @@ export {
   rateLimitedFetch,
   type RateLimitedFetchOptions,
 } from './rate-limiter/rate-limited-fetch.js';
+export { CACHE_KEY_PREFIX, requestCacheKey } from './cache/request-key.js';
