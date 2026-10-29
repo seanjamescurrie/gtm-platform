@@ -13,7 +13,7 @@ import {
 } from '@gtm/infra';
 import { CompaniesHouseClient } from '@gtm/integrations';
 import { pino } from 'pino';
-import { createIngestQueue, type IngestQueue } from './ingest/enqueue.js';
+import { createIngestQueue, type IngestQueue } from '@gtm/queues';
 import { companiesHouseFetch } from './ingest/http.js';
 import { COMPANIES_HOUSE_RATE_LIMIT, loggingBucket } from './ingest/rate-limit.js';
 import { createIngestWorker, type IngestWorker } from './ingest/worker.js';

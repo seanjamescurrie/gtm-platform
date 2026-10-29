@@ -2,7 +2,7 @@ import type { AdvancedSearchPage, CompanySearchItem } from '@gtm/integrations';
 import { CompaniesHouseError } from '@gtm/integrations';
 import { pino } from 'pino';
 import { describe, expect, it, vi } from 'vitest';
-import type { IngestPageData } from './job.js';
+import type { IngestPageData } from '@gtm/queues';
 import { toNewCompany } from './map.js';
 import { processIngestPage, type IngestPageDeps } from './processor.js';
 

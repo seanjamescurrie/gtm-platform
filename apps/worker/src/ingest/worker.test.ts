@@ -3,7 +3,7 @@ import { CompaniesHouseError } from '@gtm/integrations';
 import { RateLimitError, UnrecoverableError } from 'bullmq';
 import { pino } from 'pino';
 import { describe, expect, it, vi } from 'vitest';
-import type { IngestPageData } from './job.js';
+import type { IngestPageData } from '@gtm/queues';
 import { createIngestJobHandler, type IngestJobHandlerDeps } from './worker.js';
 
 const NOW = new Date('2026-10-08T12:00:00Z');

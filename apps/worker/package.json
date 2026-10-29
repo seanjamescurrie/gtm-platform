@@ -14,6 +14,7 @@
     "@gtm/db": "workspace:*",
     "@gtm/infra": "workspace:*",
     "@gtm/integrations": "workspace:*",
+    "@gtm/queues": "workspace:*",
     "bullmq": "6.3.11",
     "ioredis": "5.11.1",
     "pino": "10.3.1",
