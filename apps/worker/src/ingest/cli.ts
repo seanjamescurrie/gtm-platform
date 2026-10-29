@@ -3,8 +3,7 @@ import { createRedisConnection } from '@gtm/infra';
 import { parseArgs } from 'node:util';
 import { pino } from 'pino';
 import { z } from 'zod';
-import { createIngestQueue, enqueueIngestPage } from './enqueue.js';
-import { defaultRunId } from './job.js';
+import { createIngestQueue, defaultRunId, enqueueIngestPage } from '@gtm/queues';
 
 // Starts an ingest run by enqueueing its first page. The worker (`pnpm dev`) does the rest.
 // Usage: pnpm --filter @gtm/worker ingest [--sic 62011,62012] [--size 500] [--max-pages 2] [--run-id X]

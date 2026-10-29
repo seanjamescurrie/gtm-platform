@@ -10,8 +10,13 @@ import {
 } from '@gtm/integrations';
 import { pino } from 'pino';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createIngestQueue, enqueueIngestPage, type IngestQueue } from './enqueue.js';
-import { ingestJobId, type IngestPageData } from './job.js';
+import {
+  createIngestQueue,
+  enqueueIngestPage,
+  ingestJobId,
+  type IngestPageData,
+  type IngestQueue,
+} from '@gtm/queues';
 import { createIngestWorker, type IngestWorker } from './worker.js';
 
 // Real Valkey and Postgres; only Companies House is faked. Needs `docker compose up -d --wait`.

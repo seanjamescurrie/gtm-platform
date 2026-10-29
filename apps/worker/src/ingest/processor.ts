@@ -1,7 +1,7 @@
 import type { NewCompany } from '@gtm/db';
 import type { CompaniesHouseClient } from '@gtm/integrations';
 import type { Logger } from 'pino';
-import type { IngestPageData, IngestPageResult } from './job.js';
+import type { IngestPageData, IngestPageResult } from '@gtm/queues';
 import { toNewCompany } from './map.js';
 
 // Everything the processor touches comes in from outside, so tests run with fakes: no network, Valkey or Postgres.

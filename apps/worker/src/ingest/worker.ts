@@ -3,14 +3,15 @@ import type { RedisConnection } from '@gtm/infra';
 import type { CompaniesHouseClient } from '@gtm/integrations';
 import { UnrecoverableError, Worker } from 'bullmq';
 import type { Logger } from 'pino';
-import { enqueueIngestPage, type IngestQueue } from './enqueue.js';
 import { handleIngestFailure, type IngestFailureDeps } from './failure.js';
 import {
+  enqueueIngestPage,
   INGEST_QUEUE_NAME,
-  ingestPageDataSchema,
   type IngestPageData,
+  ingestPageDataSchema,
   type IngestPageResult,
-} from './job.js';
+  type IngestQueue,
+} from '@gtm/queues';
 import { processIngestPage, type IngestPageDeps } from './processor.js';
 
 export type IngestWorker = Worker<IngestPageData, IngestPageResult>;
