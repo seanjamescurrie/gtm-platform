@@ -12,7 +12,7 @@ rate limiter, and why it fails open when the limiter fails closed.
 - [x] Checkpoint 0: acceptance criteria on the issue; this doc
 - [x] Checkpoint 1: `getRedisCacheUrl()` in `@gtm/config`
 - [x] Checkpoint 2: `requestCacheKey(method, url)`
-- [ ] Checkpoint 3: `cachedFetch` in `@gtm/infra`
+- [x] Checkpoint 3: `cachedFetch` in `@gtm/infra`
 - [ ] Checkpoint 4: wiring; `cache` field in the Companies House request log
 - [ ] Checkpoint 5: live run (re-run with a new run id makes zero requests); lessons; PR
 
