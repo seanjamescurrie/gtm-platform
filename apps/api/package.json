@@ -9,7 +9,16 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@bull-board/api": "9.10.5",
+    "@bull-board/fastify": "9.10.5",
+    "@fastify/basic-auth": "6.3.1",
     "@gtm/config": "workspace:*",
-    "fastify": "5.12.5"
+    "@gtm/infra": "workspace:*",
+    "@gtm/queues": "workspace:*",
+    "bullmq": "6.3.11",
+    "fastify": "5.12.5",
+    "ioredis": "5.11.1",
+    "pino": "10.3.1",
+    "zod": "4.6.5"
   }
 }
