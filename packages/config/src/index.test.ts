@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { getApiPort, getCompaniesHouseApiKey, getDatabaseUrl, getRedisUrl } from './index.js';
+import {
+  getApiPort,
+  getCompaniesHouseApiKey,
+  getDatabaseUrl,
+  getRedisCacheUrl,
+  getRedisUrl,
+} from './index.js';
 
 describe('getApiPort', () => {
   it('defaults to 3000 when API_PORT is unset or empty', () => {
@@ -78,6 +84,49 @@ describe('getRedisUrl', () => {
       message = (err as Error).message;
     }
     expect(message).toMatch(/^REDIS_URL /);
+    expect(message).not.toContain('s3cret');
+  });
+});
+
+describe('getRedisCacheUrl', () => {
+  const REDIS_URL = 'redis://localhost:6379';
+
+  it('uses REDIS_CACHE_URL when it is set', () => {
+    expect(
+      getRedisCacheUrl({ REDIS_URL, REDIS_CACHE_URL: 'rediss://cache.example.com:6379' }),
+    ).toBe('rediss://cache.example.com:6379');
+  });
+
+  it('falls back to REDIS_URL when REDIS_CACHE_URL is unset or empty', () => {
+    expect(getRedisCacheUrl({ REDIS_URL })).toBe(REDIS_URL);
+    expect(getRedisCacheUrl({ REDIS_URL, REDIS_CACHE_URL: '' })).toBe(REDIS_URL);
+  });
+
+  it('works with only REDIS_CACHE_URL set', () => {
+    expect(getRedisCacheUrl({ REDIS_CACHE_URL: 'redis://cache:6379' })).toBe('redis://cache:6379');
+  });
+
+  it('falls back with the REDIS_URL error when neither is set', () => {
+    expect(() => getRedisCacheUrl({})).toThrow('REDIS_URL is not set');
+  });
+
+  it.each(['not a url', 'http://localhost:6379'])(
+    'rejects REDIS_CACHE_URL=%j, naming that variable, even when REDIS_URL is fine',
+    (raw) => {
+      expect(() => getRedisCacheUrl({ REDIS_URL, REDIS_CACHE_URL: raw })).toThrow(
+        /^REDIS_CACHE_URL must be a redis/,
+      );
+    },
+  );
+
+  it('never includes the value (and its password) in the error', () => {
+    let message = '';
+    try {
+      getRedisCacheUrl({ REDIS_URL, REDIS_CACHE_URL: 'http://user:s3cret@host:6379' });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toMatch(/^REDIS_CACHE_URL /);
     expect(message).not.toContain('s3cret');
   });
 });
